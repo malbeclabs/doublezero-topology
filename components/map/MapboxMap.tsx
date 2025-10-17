@@ -1,0 +1,680 @@
+"use client";
+
+import { useRef, useState, useMemo, useEffect } from "react";
+import Map, { Source, Layer } from "react-map-gl/maplibre";
+import type { MapRef, ViewState } from "react-map-gl/maplibre";
+import type { LayerProps } from "react-map-gl/maplibre";
+import "maplibre-gl/dist/maplibre-gl.css";
+import { useTheme } from "next-themes";
+import { X } from "lucide-react";
+
+import type { TopologyLink, Location, HealthStatus } from "@/types/topology";
+import { getHealthColor, rgbToHex } from "@/types/topology";
+import { generateGeodesicArc, shouldUseGeodesicArc } from "@/lib/geodesic";
+import { useTableStore } from "@/lib/stores/table-store";
+
+interface MapboxMapProps {
+  links: TopologyLink[];
+  locations: Location[];
+  visibleStatuses?: Set<HealthStatus>;
+  showLinks?: boolean;
+  showNodes?: boolean;
+}
+
+interface LinkProperties {
+  link_pk: string;
+  link_code: string;
+  device_a: string;
+  device_z: string;
+  location_a: string;
+  location_z: string;
+  expected_delay_us: number;
+  measured_p50_us: number | null;
+  measured_p90_us: number | null;
+  measured_p95_us: number | null;
+  measured_p99_us: number | null;
+  isis_metric: number | null;
+  drift_pct: number | null;
+  health_status: string;
+  color: string;
+  width: number;
+  opacity: number;
+}
+
+interface NodeProperties {
+  location_pk: string;
+  code: string;
+  name: string;
+  country: string;
+  device_count: number;
+  devices: string;
+  reference_count: number;
+}
+
+const INITIAL_VIEW_STATE: Partial<ViewState> = {
+  longitude: -98.5795,
+  latitude: 39.8283,
+  zoom: 3.5,
+};
+
+const MAP_STYLE_LIGHT = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
+const MAP_STYLE_DARK = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
+
+function getLineWidth(link: TopologyLink): number {
+  return 2;
+}
+
+function getLineOpacity(link: TopologyLink): number {
+  return link.health_status === "HEALTHY" ? 0.6 : 0.9;
+}
+
+function linksToGeoJSON(
+  links: TopologyLink[],
+  selectedLinkPk: string | null = null,
+  hoveredLinkPk: string | null = null,
+  useGeodesic: boolean = true,
+): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = links
+    .map((link) => {
+      const sourceCoords: [number, number] = [link.device_a_lon, link.device_a_lat];
+      const targetCoords: [number, number] = [link.device_z_lon, link.device_z_lat];
+
+      const shouldUseArc = useGeodesic && shouldUseGeodesicArc(sourceCoords, targetCoords);
+      const coordinates = shouldUseArc
+        ? generateGeodesicArc(sourceCoords, targetCoords)
+        : [sourceCoords, targetCoords];
+
+      const healthColor = getHealthColor(link.health_status);
+      const hexColor = rgbToHex(healthColor);
+
+      const isSelected = link.link_pk === selectedLinkPk;
+      const isHovered = link.link_pk === hoveredLinkPk;
+
+      let width = getLineWidth(link);
+      let opacity = getLineOpacity(link);
+
+      if (isSelected) {
+        width = Math.max(width * 2, 6);
+        opacity = 1.0;
+      } else if (isHovered) {
+        width = Math.max(width * 1.5, 4);
+        opacity = Math.min(opacity + 0.2, 1.0);
+      } else if (selectedLinkPk || hoveredLinkPk) {
+        opacity = opacity * 0.3;
+      }
+
+      return {
+        type: "Feature",
+        geometry: {
+          type: "LineString",
+          coordinates,
+        },
+        properties: {
+          link_pk: link.link_pk,
+          link_code: link.link_code,
+          device_a: link.device_a_code,
+          device_z: link.device_z_code,
+          location_a: link.device_a_location_name,
+          location_z: link.device_z_location_name,
+          expected_delay_us: link.expected_delay_us,
+          measured_p50_us: link.measured_p50_us,
+          measured_p90_us: link.measured_p90_us,
+          measured_p95_us: link.measured_p95_us,
+          measured_p99_us: link.measured_p99_us,
+          isis_metric: link.isis_metric,
+          drift_pct: link.drift_pct,
+          health_status: link.health_status,
+          color: hexColor,
+          width,
+          opacity,
+        },
+      } as GeoJSON.Feature;
+    })
+    .filter(Boolean) as GeoJSON.Feature[];
+
+  return {
+    type: "FeatureCollection",
+    features,
+  };
+}
+
+function locationsToGeoJSON(locations: Location[]): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = locations.map((location) => ({
+    type: "Feature",
+    geometry: {
+      type: "Point",
+      coordinates: [location.lon, location.lat],
+    },
+    properties: {
+      location_pk: location.location_pk,
+      code: location.code,
+      name: location.name,
+      country: location.country || "",
+      device_count: location.device_count,
+      devices: location.devices.join(', '),
+      reference_count: location.reference_count || 0,
+    },
+  }));
+
+  return {
+    type: "FeatureCollection",
+    features,
+  };
+}
+
+export function MapboxMap({
+  links,
+  locations,
+  visibleStatuses,
+  showLinks = true,
+  showNodes = true,
+}: MapboxMapProps) {
+  const mapRef = useRef<MapRef>(null);
+  const [hoveredLink, setHoveredLink] = useState<LinkProperties | null>(null);
+  const [hoveredNode, setHoveredNode] = useState<NodeProperties | null>(null);
+  const [cursorPosition, setCursorPosition] = useState<{ x: number; y: number } | null>(null);
+  const [pinnedLink, setPinnedLink] = useState<LinkProperties | null>(null);
+  const [pinnedNode, setPinnedNode] = useState<NodeProperties | null>(null);
+
+  const { resolvedTheme } = useTheme();
+  const { selectedLinkPk, hoveredLinkPk, setSelectedLink, setHoveredLink: setHoveredLinkStore } = useTableStore();
+
+  const mapStyle = resolvedTheme === "dark" ? MAP_STYLE_DARK : MAP_STYLE_LIGHT;
+
+  const filteredLocations = useMemo(() => {
+    return locations.filter(loc => loc.device_count > 0);
+  }, [locations]);
+
+  const filteredLinks = useMemo(() => {
+    if (!visibleStatuses || visibleStatuses.size === 0) {
+      return links;
+    }
+    return links.filter(link => visibleStatuses.has(link.health_status));
+  }, [links, visibleStatuses]);
+
+  const linksGeoJSON = useMemo(() => {
+    return linksToGeoJSON(filteredLinks, selectedLinkPk, hoveredLinkPk);
+  }, [filteredLinks, selectedLinkPk, hoveredLinkPk]);
+
+  const locationsGeoJSON = useMemo(() => {
+    return locationsToGeoJSON(filteredLocations);
+  }, [filteredLocations]);
+
+  useEffect(() => {
+    if (!selectedLinkPk) {
+      setPinnedLink(null);
+      setPinnedNode(null);
+    }
+  }, [selectedLinkPk]);
+
+  useEffect(() => {
+    if (!selectedLinkPk || !mapRef.current) return;
+
+    const link = links.find(l => l.link_pk === selectedLinkPk);
+    if (!link) return;
+
+    const startLon = link.device_a_lon;
+    const startLat = link.device_a_lat;
+    const endLon = link.device_z_lon;
+    const endLat = link.device_z_lat;
+
+    const minLon = Math.min(startLon, endLon);
+    const maxLon = Math.max(startLon, endLon);
+    const minLat = Math.min(startLat, endLat);
+    const maxLat = Math.max(startLat, endLat);
+
+    const lonPadding = (maxLon - minLon) * 0.1 || 1;
+    const latPadding = (maxLat - minLat) * 0.1 || 1;
+
+    mapRef.current.fitBounds(
+      [
+        [minLon - lonPadding, minLat - latPadding],
+        [maxLon + lonPadding, maxLat + latPadding],
+      ],
+      {
+        padding: 40,
+        duration: 1000,
+        maxZoom: 8,
+      }
+    );
+  }, [selectedLinkPk, links]);
+
+  const lineLayer: LayerProps = {
+    id: "network-links",
+    type: "line",
+    source: "links",
+    layout: {
+      "line-join": "round",
+      "line-cap": "round",
+      visibility: showLinks ? "visible" : "none",
+    },
+    paint: {
+      "line-color": ["get", "color"],
+      "line-width": ["get", "width"],
+      "line-opacity": ["get", "opacity"],
+    },
+  };
+
+  const circleLayer: LayerProps = {
+    id: "network-nodes",
+    type: "circle",
+    source: "locations",
+    layout: {
+      visibility: showNodes ? "visible" : "none",
+    },
+    paint: {
+      "circle-radius": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        3,
+        ["max", ["*", ["get", "device_count"], 0.5], 3],
+        10,
+        ["max", ["*", ["get", "device_count"], 2], 5],
+      ],
+      "circle-color": "#3b82f6",
+      "circle-opacity": 0.8,
+      "circle-stroke-width": 2,
+      "circle-stroke-color": "#1e40af",
+      "circle-stroke-opacity": 0.5,
+    },
+  };
+
+  const handleMapClick = (event: maplibregl.MapMouseEvent) => {
+    const map = mapRef.current?.getMap();
+    if (!map || !map.isStyleLoaded()) return;
+
+    if (!map.getLayer("network-links") || !map.getLayer("network-nodes")) {
+      return;
+    }
+
+    const features = map.queryRenderedFeatures(event.point, {
+      layers: ["network-links", "network-nodes"],
+    });
+
+    if (features.length > 0) {
+      const feature = features[0];
+
+      if (feature.layer.id === "network-links") {
+        const linkProps = feature.properties as LinkProperties;
+        const linkPk = linkProps.link_pk;
+
+        if (linkPk === selectedLinkPk) {
+          setSelectedLink(null);
+          setPinnedLink(null);
+        } else {
+          setSelectedLink(linkPk);
+          setPinnedLink(linkProps);
+          setPinnedNode(null);
+        }
+      } else if (feature.layer.id === "network-nodes") {
+        const nodeProps = feature.properties as NodeProperties;
+        setPinnedNode(nodeProps);
+        setPinnedLink(null);
+        setSelectedLink(null);
+      }
+    } else {
+      setSelectedLink(null);
+      setPinnedLink(null);
+      setPinnedNode(null);
+    }
+  };
+
+  const handleMouseMove = (event: maplibregl.MapMouseEvent) => {
+    const map = mapRef.current?.getMap();
+    if (!map || !map.isStyleLoaded()) return;
+
+    if (!map.getLayer("network-links") || !map.getLayer("network-nodes")) {
+      return;
+    }
+
+    const features = map.queryRenderedFeatures(event.point, {
+      layers: ["network-links", "network-nodes"],
+    });
+
+    if (features.length > 0) {
+      const feature = features[0];
+
+      if (feature.layer.id === "network-links") {
+        const linkProps = feature.properties as LinkProperties;
+        setHoveredLink(linkProps);
+        setHoveredNode(null);
+        setHoveredLinkStore(linkProps.link_pk);
+        map.getCanvas().style.cursor = "pointer";
+      } else if (feature.layer.id === "network-nodes") {
+        setHoveredNode(feature.properties as NodeProperties);
+        setHoveredLink(null);
+        setHoveredLinkStore(null);
+        map.getCanvas().style.cursor = "pointer";
+      }
+
+      setCursorPosition({ x: event.point.x, y: event.point.y });
+    } else {
+      setHoveredLink(null);
+      setHoveredNode(null);
+      setHoveredLinkStore(null);
+      setCursorPosition(null);
+      map.getCanvas().style.cursor = "";
+    }
+  };
+
+  return (
+    <div className="relative w-full h-full">
+      <Map
+        ref={mapRef}
+        initialViewState={INITIAL_VIEW_STATE}
+        mapStyle={mapStyle}
+        attributionControl={false}
+        onClick={handleMapClick}
+        onMouseMove={handleMouseMove}
+        interactiveLayerIds={["network-links", "network-nodes"]}
+      >
+        <Source id="links" type="geojson" data={linksGeoJSON}>
+          <Layer {...lineLayer} />
+        </Source>
+
+        <Source id="locations" type="geojson" data={locationsGeoJSON}>
+          <Layer {...circleLayer} />
+        </Source>
+      </Map>
+      {cursorPosition && (hoveredLink || hoveredNode) && !pinnedLink && !pinnedNode && (
+        <div
+          className="absolute z-[2000] pointer-events-none px-5 py-4 rounded-lg text-sm max-w-md bg-background border border-border"
+          style={{
+            left: cursorPosition.x + 20,
+            top: cursorPosition.y + 20,
+            boxShadow: 'var(--shadow-xl)',
+          }}
+        >
+          {hoveredLink && (
+            <div>
+              {/* Title */}
+              <div className="text-lg font-bold mb-3 pb-3 border-b border-border text-foreground">
+                {hoveredLink.location_a} → {hoveredLink.location_z}
+              </div>
+
+              {/* Simplified content */}
+              <div className="space-y-2">
+                <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+                  <span className="text-muted-foreground">Link Code:</span>
+                  <span className="font-mono text-xs font-medium text-foreground">
+                    {hoveredLink.link_code || 'N/A'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+                  <span className="text-muted-foreground">Status:</span>
+                  <span
+                    className={`inline-block px-2.5 py-1 rounded text-xs font-semibold uppercase tracking-wide ${
+                      hoveredLink.health_status === 'HEALTHY'
+                        ? 'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400'
+                        : hoveredLink.health_status === 'DRIFT_HIGH'
+                        ? 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400'
+                        : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'
+                    }`}
+                  >
+                    {hoveredLink.health_status.replace('_', ' ')}
+                  </span>
+                </div>
+                {hoveredLink.drift_pct !== null && (
+                  <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+                    <span className="text-muted-foreground">Drift:</span>
+                    <span className={`font-semibold ${
+                      hoveredLink.drift_pct >= 20
+                        ? 'text-red-600 dark:text-red-400'
+                        : hoveredLink.drift_pct >= 10
+                        ? 'text-orange-600 dark:text-orange-400'
+                        : 'text-yellow-600 dark:text-yellow-400'
+                    }`}>
+                      {hoveredLink.drift_pct.toFixed(2)}%
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+                  <span className="text-muted-foreground">Expected Delay:</span>
+                  <span className="font-medium text-foreground">
+                    {(hoveredLink.expected_delay_us / 1000).toFixed(2)} ms
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+                  <span className="text-muted-foreground">Measured (P90):</span>
+                  <span className="font-medium text-foreground">
+                    {hoveredLink.measured_p90_us !== null
+                      ? `${(hoveredLink.measured_p90_us / 1000).toFixed(2)} ms`
+                      : 'N/A'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+                  <span className="text-muted-foreground">Measured (P95):</span>
+                  <span className="font-medium text-foreground">
+                    {hoveredLink.measured_p95_us !== null
+                      ? `${(hoveredLink.measured_p95_us / 1000).toFixed(2)} ms`
+                      : 'N/A'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+                  <span className="text-muted-foreground">Measured (P99):</span>
+                  <span className="font-medium text-foreground">
+                    {hoveredLink.measured_p99_us !== null
+                      ? `${(hoveredLink.measured_p99_us / 1000).toFixed(2)} ms`
+                      : 'N/A'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1.5">
+                  <span className="text-muted-foreground">IS-IS Metric:</span>
+                  <span className="font-medium text-foreground">
+                    {hoveredLink.isis_metric !== null
+                      ? `${(hoveredLink.isis_metric / 1000).toFixed(2)} ms`
+                      : 'N/A'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {hoveredNode && (
+            <div>
+              {/* Title */}
+              <div className="text-lg font-bold mb-3 pb-3 border-b border-border text-foreground">
+                {hoveredNode.name}
+                {hoveredNode.country && hoveredNode.country !== '' ? `, ${hoveredNode.country}` : ''}
+              </div>
+
+              {/* Location Details */}
+              <div className="mb-4">
+                <div className="text-xs font-semibold uppercase tracking-wide mb-2 text-muted-foreground">
+                  Location Details
+                </div>
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+                    <span className="text-muted-foreground">Code:</span>
+                    <span className="font-mono text-xs font-medium text-foreground">{hoveredNode.code}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Network Statistics */}
+              <div className="mb-4">
+                <div className="text-xs font-semibold uppercase tracking-wide mb-2 text-muted-foreground">
+                  Network Statistics
+                </div>
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center py-1.5">
+                    <span className="text-muted-foreground">Total Devices:</span>
+                    <span className="font-semibold text-blue-600 dark:text-blue-400">{hoveredNode.device_count}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Device List */}
+              {hoveredNode.devices && hoveredNode.device_count > 0 && (
+                <div className="mt-3 px-3 py-2.5 rounded-lg bg-muted border border-border">
+                  <div className="font-semibold mb-2 text-xs text-foreground">
+                    Devices:
+                  </div>
+                  <div className="space-y-1 text-xs text-muted-foreground">
+                    {hoveredNode.devices.split(', ').map((device: string, i: number) => (
+                      <div key={i} className="font-mono">• {device}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Pinned tooltip (fixed position, bottom-right) */}
+      {(pinnedLink || pinnedNode) && (
+        <div className="absolute bottom-4 right-4 z-[2001] w-96 max-h-[80vh] overflow-y-auto px-5 py-4 rounded-lg text-sm bg-background border border-border shadow-2xl">
+          {/* Close button */}
+          <button
+            onClick={() => {
+              setPinnedLink(null);
+              setPinnedNode(null);
+              setSelectedLink(null);
+            }}
+            className="absolute top-3 right-3 p-1 rounded-md hover:bg-accent transition-colors"
+            title="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+
+          {pinnedLink && (
+            <div>
+              {/* Title */}
+              <div className="text-lg font-bold mb-3 pb-3 border-b border-border text-foreground pr-8">
+                {pinnedLink.location_a} → {pinnedLink.location_z}
+              </div>
+
+              {/* Simplified content */}
+              <div className="space-y-2">
+                <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+                  <span className="text-muted-foreground">Link Code:</span>
+                  <span className="font-mono text-xs font-medium text-foreground">
+                    {pinnedLink.link_code || 'N/A'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+                  <span className="text-muted-foreground">Status:</span>
+                  <span
+                    className={`inline-block px-2.5 py-1 rounded text-xs font-semibold uppercase tracking-wide ${
+                      pinnedLink.health_status === 'HEALTHY'
+                        ? 'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400'
+                        : pinnedLink.health_status === 'DRIFT_HIGH'
+                        ? 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400'
+                        : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'
+                    }`}
+                  >
+                    {pinnedLink.health_status.replace('_', ' ')}
+                  </span>
+                </div>
+                {pinnedLink.drift_pct !== null && (
+                  <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+                    <span className="text-muted-foreground">Drift:</span>
+                    <span className={`font-semibold ${
+                      pinnedLink.drift_pct >= 20
+                        ? 'text-red-600 dark:text-red-400'
+                        : pinnedLink.drift_pct >= 10
+                        ? 'text-orange-600 dark:text-orange-400'
+                        : 'text-yellow-600 dark:text-yellow-400'
+                    }`}>
+                      {pinnedLink.drift_pct.toFixed(2)}%
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+                  <span className="text-muted-foreground">Expected Delay:</span>
+                  <span className="font-medium text-foreground">
+                    {(pinnedLink.expected_delay_us / 1000).toFixed(2)} ms
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+                  <span className="text-muted-foreground">Measured (P90):</span>
+                  <span className="font-medium text-foreground">
+                    {pinnedLink.measured_p90_us !== null
+                      ? `${(pinnedLink.measured_p90_us / 1000).toFixed(2)} ms`
+                      : 'N/A'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+                  <span className="text-muted-foreground">Measured (P95):</span>
+                  <span className="font-medium text-foreground">
+                    {pinnedLink.measured_p95_us !== null
+                      ? `${(pinnedLink.measured_p95_us / 1000).toFixed(2)} ms`
+                      : 'N/A'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+                  <span className="text-muted-foreground">Measured (P99):</span>
+                  <span className="font-medium text-foreground">
+                    {pinnedLink.measured_p99_us !== null
+                      ? `${(pinnedLink.measured_p99_us / 1000).toFixed(2)} ms`
+                      : 'N/A'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1.5">
+                  <span className="text-muted-foreground">IS-IS Metric:</span>
+                  <span className="font-medium text-foreground">
+                    {pinnedLink.isis_metric !== null
+                      ? `${(pinnedLink.isis_metric / 1000).toFixed(2)} ms`
+                      : 'N/A'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {pinnedNode && (
+            <div>
+              {/* Title */}
+              <div className="text-lg font-bold mb-3 pb-3 border-b border-border text-foreground pr-8">
+                {pinnedNode.name}
+                {pinnedNode.country && pinnedNode.country !== '' ? `, ${pinnedNode.country}` : ''}
+              </div>
+
+              {/* Location Details */}
+              <div className="mb-4">
+                <div className="text-xs font-semibold uppercase tracking-wide mb-2 text-muted-foreground">
+                  Location Details
+                </div>
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+                    <span className="text-muted-foreground">Code:</span>
+                    <span className="font-mono text-xs font-medium text-foreground">{pinnedNode.code}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Network Statistics */}
+              <div className="mb-4">
+                <div className="text-xs font-semibold uppercase tracking-wide mb-2 text-muted-foreground">
+                  Network Statistics
+                </div>
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center py-1.5">
+                    <span className="text-muted-foreground">Total Devices:</span>
+                    <span className="font-semibold text-blue-600 dark:text-blue-400">{pinnedNode.device_count}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Device List */}
+              {pinnedNode.devices && pinnedNode.device_count > 0 && (
+                <div className="mt-3 px-3 py-2.5 rounded-lg bg-muted border border-border">
+                  <div className="font-semibold mb-2 text-xs text-foreground">
+                    Devices:
+                  </div>
+                  <div className="space-y-1 text-xs text-muted-foreground">
+                    {pinnedNode.devices.split(', ').map((device: string, i: number) => (
+                      <div key={i} className="font-mono">• {device}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
