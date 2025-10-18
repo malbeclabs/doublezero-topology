@@ -3,20 +3,12 @@
 /**
  * File Upload Page
  *
- * Allows users to upload topology data files:
- * - snapshot.json (max 100MB) - Serviceability and telemetry data
- * - isis-db.json (max 10MB) - IS-IS routing protocol data
- *
- * Features:
- * - File drag-and-drop
- * - File size validation
- * - Upload progress feedback
- * - Success/error messages
+ * Allows users to upload topology data files for analysis.
+ * Files are processed directly in memory - no external storage required.
  */
 
 import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { uploadFiles } from "@/app/actions/upload";
 import { useTopology } from "@/contexts/TopologyContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,7 +17,7 @@ import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 
-type UploadState = "idle" | "uploading" | "processing" | "success" | "error";
+type UploadState = "idle" | "uploading" | "success" | "error";
 
 export default function UploadPage() {
   const router = useRouter();
@@ -35,7 +27,6 @@ export default function UploadPage() {
   const [snapshotFile, setSnapshotFile] = useState<File | null>(null);
   const [isisFile, setIsisFile] = useState<File | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
-  const [processingProgress, setProcessingProgress] = useState<number>(0);
 
   const snapshotInputRef = useRef<HTMLInputElement>(null);
   const isisInputRef = useRef<HTMLInputElement>(null);
@@ -75,8 +66,10 @@ export default function UploadPage() {
     setUploadState("uploading");
     setUploadProgress(0);
     setErrorMessage("");
+    setIsLoading(true);
+    setError(null);
 
-    // Simulate progress (real progress would require chunked upload)
+    // Simulate progress
     const progressInterval = setInterval(() => {
       setUploadProgress((prev) => {
         if (prev >= 90) {
@@ -92,88 +85,52 @@ export default function UploadPage() {
       formData.append("snapshot", snapshotFile);
       formData.append("isis", isisFile);
 
-      // Step 1: Upload files to S3
-      const result = await uploadFiles(formData);
+      // Upload and process files in one step
+      const response = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      });
 
       clearInterval(progressInterval);
       setUploadProgress(100);
 
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Upload and processing failed");
+      }
+
+      const result = await response.json();
+
       if (!result.success) {
-        setUploadState("error");
-        setErrorMessage(result.error || "Upload failed");
-        return;
+        throw new Error(result.error || "Processing failed");
       }
 
-      // Step 2: Process topology data
-      setUploadState("processing");
-      setProcessingProgress(0);
+      // Store processed data in context (transform to match expected structure)
+      setTopologyData({
+        topology: result.data.topology,
+        locations: result.data.locations,
+        summary: result.data.summary,
+        metadata: {
+          snapshotKey: snapshotFile.name,
+          isisKey: isisFile.name,
+          processedAt: result.data.processedAt,
+        },
+      });
+      setIsLoading(false);
+      setUploadState("success");
 
-      // Simulate processing progress
-      const processingInterval = setInterval(() => {
-        setProcessingProgress((prev) => {
-          if (prev >= 90) {
-            clearInterval(processingInterval);
-            return 90;
-          }
-          return prev + 10;
-        });
-      }, 300);
-
-      try {
-        setIsLoading(true);
-        setError(null);
-
-        const topologyResponse = await fetch("/api/topology", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            snapshotKey: result.data.snapshotKey,
-            isisKey: result.data.isisKey,
-          }),
-        });
-
-        clearInterval(processingInterval);
-        setProcessingProgress(100);
-
-        if (!topologyResponse.ok) {
-          const errorData = await topologyResponse.json();
-          throw new Error(errorData.error || "Topology processing failed");
-        }
-
-        const topologyData = await topologyResponse.json();
-
-        if (!topologyData.success) {
-          throw new Error(topologyData.error || "Topology processing failed");
-        }
-
-        // Store processed data in context
-        setTopologyData(topologyData.data);
-        setIsLoading(false);
-        setUploadState("success");
-
-        // Redirect to results page after 2 seconds
-        setTimeout(() => {
-          router.push("/results");
-        }, 2000);
-      } catch (processingError) {
-        clearInterval(processingInterval);
-        setIsLoading(false);
-        setUploadState("error");
-        const errorMsg =
-          processingError instanceof Error
-            ? processingError.message
-            : "Processing failed";
-        setErrorMessage(`Processing failed: ${errorMsg}`);
-        setError(errorMsg);
-      }
+      // Redirect to results page
+      setTimeout(() => {
+        router.push("/results");
+      }, 2000);
     } catch (error) {
       clearInterval(progressInterval);
+      setIsLoading(false);
       setUploadState("error");
-      setErrorMessage(
-        error instanceof Error ? error.message : "An unexpected error occurred"
-      );
+      const errorMsg =
+        error instanceof Error ? error.message : "An unexpected error occurred";
+      setErrorMessage(errorMsg);
+      setError(errorMsg);
     }
   };
 
@@ -250,21 +207,10 @@ export default function UploadPage() {
             {/* Upload Progress Bar */}
             {uploadState === "uploading" && (
               <div className="space-y-2">
-                <Label>Upload Progress</Label>
+                <Label>Processing Files</Label>
                 <Progress value={uploadProgress} className="w-full" />
                 <p className="text-sm text-muted-foreground text-center">
-                  {uploadProgress}% - Uploading files to storage...
-                </p>
-              </div>
-            )}
-
-            {/* Processing Progress Bar */}
-            {uploadState === "processing" && (
-              <div className="space-y-2">
-                <Label>Processing Progress</Label>
-                <Progress value={processingProgress} className="w-full" />
-                <p className="text-sm text-muted-foreground text-center">
-                  {processingProgress}% - Analyzing topology data...
+                  {uploadProgress}% - Analyzing topology data...
                 </p>
               </div>
             )}
@@ -273,7 +219,7 @@ export default function UploadPage() {
             {uploadState === "success" && (
               <Alert className="border-green-500 bg-green-50">
                 <AlertDescription className="text-green-800">
-                  Topology data processed successfully! Redirecting to results...
+                  Files processed successfully! Redirecting to results...
                 </AlertDescription>
               </Alert>
             )}
@@ -293,20 +239,18 @@ export default function UploadPage() {
                   !snapshotFile ||
                   !isisFile ||
                   uploadState === "uploading" ||
-                  uploadState === "processing" ||
                   uploadState === "success"
                 }
                 className="flex-1"
               >
-                {uploadState === "uploading" && "Uploading..."}
-                {uploadState === "processing" && "Processing..."}
-                {uploadState !== "uploading" && uploadState !== "processing" && "Upload Files"}
+                {uploadState === "uploading" && "Processing..."}
+                {uploadState !== "uploading" && "Upload & Process"}
               </Button>
               <Button
                 type="button"
                 variant="outline"
                 onClick={handleReset}
-                disabled={uploadState === "uploading" || uploadState === "processing" || uploadState === "success"}
+                disabled={uploadState === "uploading" || uploadState === "success"}
               >
                 Reset
               </Button>
