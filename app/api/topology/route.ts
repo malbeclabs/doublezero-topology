@@ -13,6 +13,7 @@ import { z } from "zod";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { s3Client, S3_BUCKET } from "@/lib/s3/client";
 import type { TopologyLink, TopologyHealthSummary, Location } from "@/types/topology";
+import { classifyDataCompleteness } from "@/lib/topology/data-completeness";
 
 /**
  * Calculate median of an array of numbers
@@ -508,6 +509,13 @@ export async function GET(): Promise<Response> {
         driftPct = (Math.abs(measuredP50 - expectedDelayUs) / expectedDelayUs) * 100;
       }
 
+      // Determine data availability
+      const hasTelemetry = measuredP50 != null && samples.length > 0;
+      const hasIsis = isisMetric != null;
+
+      // Classify data completeness
+      const dataStatus = classifyDataCompleteness(hasTelemetry, hasIsis);
+
       // Determine health status
       let healthStatus: 'HEALTHY' | 'DRIFT_HIGH' | 'MISSING_TELEMETRY' | 'MISSING_ISIS';
       if (measuredP50 == null || samples.length === 0) {
@@ -557,6 +565,11 @@ export async function GET(): Promise<Response> {
         isis_interface_name: tunnelNet,
         drift_pct: driftPct,
         health_status: healthStatus,
+        // Data completeness
+        data_status: dataStatus,
+        has_serviceability: true,
+        has_telemetry: hasTelemetry,
+        has_isis: hasIsis,
       });
     }
 
@@ -770,6 +783,13 @@ export async function POST(request: Request): Promise<Response> {
         driftPct = (Math.abs(measuredP50 - expectedDelayUs) / expectedDelayUs) * 100;
       }
 
+      // Determine data availability
+      const hasTelemetry = measuredP50 != null && samples.length > 0;
+      const hasIsis = isisMetric != null;
+
+      // Classify data completeness
+      const dataStatus = classifyDataCompleteness(hasTelemetry, hasIsis);
+
       // Determine health status
       let healthStatus: 'HEALTHY' | 'DRIFT_HIGH' | 'MISSING_TELEMETRY' | 'MISSING_ISIS';
       if (measuredP50 == null || samples.length === 0) {
@@ -819,6 +839,11 @@ export async function POST(request: Request): Promise<Response> {
         isis_interface_name: tunnelNet,
         drift_pct: driftPct,
         health_status: healthStatus,
+        // Data completeness
+        data_status: dataStatus,
+        has_serviceability: true,
+        has_telemetry: hasTelemetry,
+        has_isis: hasIsis,
       });
     }
 

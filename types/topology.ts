@@ -15,6 +15,16 @@ export type HealthStatus =
   | "MISSING_ISIS"; // No IS-IS data available
 
 /**
+ * Data completeness status for a network link
+ * Indicates which data sources are available for the link
+ */
+export type DataCompleteness =
+  | "COMPLETE" // Has serviceability + telemetry + ISIS data
+  | "MISSING_ISIS" // Has serviceability + telemetry, but NO ISIS data
+  | "MISSING_TELEMETRY" // Has serviceability + ISIS, but NO telemetry
+  | "MISSING_BOTH"; // Has serviceability, but missing both ISIS and telemetry
+
+/**
  * Topology link with health metrics
  *
  * Result of three-way comparison between serviceability, telemetry, and IS-IS data.
@@ -64,6 +74,12 @@ export interface TopologyLink {
   // Health metrics
   drift_pct: number | null; // Percentage drift between expected and measured
   health_status: HealthStatus; // Overall health status
+
+  // Data completeness
+  data_status: DataCompleteness; // Data completeness status
+  has_serviceability: boolean; // Always true (required for link to exist)
+  has_telemetry: boolean; // Has telemetry data
+  has_isis: boolean; // Has IS-IS data
 }
 
 /**
@@ -222,4 +238,81 @@ export function getHealthTailwind(status: HealthStatus): string {
  */
 export function rgbToHex(rgb: [number, number, number]): string {
   return `#${rgb.map(c => c.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/**
+ * Data completeness status color mapping for visualization
+ */
+export const DATA_STATUS_COLORS: Record<
+  DataCompleteness,
+  { rgb: [number, number, number]; hex: string; tailwind: string }
+> = {
+  COMPLETE: {
+    rgb: [34, 197, 94], // Green
+    hex: "#22c55e",
+    tailwind: "text-green-500",
+  },
+  MISSING_ISIS: {
+    rgb: [239, 68, 68], // Red (high alert)
+    hex: "#ef4444",
+    tailwind: "text-red-500",
+  },
+  MISSING_TELEMETRY: {
+    rgb: [234, 179, 8], // Yellow
+    hex: "#eab308",
+    tailwind: "text-yellow-500",
+  },
+  MISSING_BOTH: {
+    rgb: [161, 161, 170], // Gray
+    hex: "#a1a1aa",
+    tailwind: "text-gray-400",
+  },
+};
+
+/**
+ * Get RGB color for data completeness status
+ *
+ * @param status - Data completeness status
+ * @returns RGB array [r, g, b]
+ */
+export function getDataStatusColor(
+  status: DataCompleteness
+): [number, number, number] {
+  return DATA_STATUS_COLORS[status].rgb;
+}
+
+/**
+ * Get hex color for data completeness status
+ *
+ * @param status - Data completeness status
+ * @returns Hex color string
+ */
+export function getDataStatusHex(status: DataCompleteness): string {
+  return DATA_STATUS_COLORS[status].hex;
+}
+
+/**
+ * Get Tailwind class for data completeness status
+ *
+ * @param status - Data completeness status
+ * @returns Tailwind CSS class name
+ */
+export function getDataStatusTailwind(status: DataCompleteness): string {
+  return DATA_STATUS_COLORS[status].tailwind;
+}
+
+/**
+ * Get human-readable label for data completeness status
+ *
+ * @param status - Data completeness status
+ * @returns Human-readable label
+ */
+export function getDataStatusLabel(status: DataCompleteness): string {
+  const labels: Record<DataCompleteness, string> = {
+    COMPLETE: "Complete",
+    MISSING_ISIS: "Missing IS-IS",
+    MISSING_TELEMETRY: "Missing Telemetry",
+    MISSING_BOTH: "Missing Both",
+  };
+  return labels[status];
 }

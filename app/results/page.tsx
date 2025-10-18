@@ -28,6 +28,13 @@ export default function ResultsPage() {
     setMounted(true);
   }, []);
 
+  // Prefetch map page for faster navigation
+  useEffect(() => {
+    if (topologyData) {
+      router.prefetch('/map');
+    }
+  }, [topologyData, router]);
+
   // Redirect to upload if no data
   useEffect(() => {
     if (mounted && !isLoading && !topologyData && !error) {
@@ -83,208 +90,126 @@ export default function ResultsPage() {
   };
 
   return (
-    <div className="container mx-auto py-10 max-w-6xl space-y-6">
+    <div className="container mx-auto py-10 max-w-6xl space-y-8">
       {/* Header */}
-      <div>
-        <h1 className="font-heading text-3xl font-bold">Topology Analysis</h1>
-        <p className="font-body text-muted-foreground mt-2">
-          Three-way comparison of serviceability contracts, telemetry measurements, and IS-IS protocol state
+      <div className="text-center">
+        <h1 className="font-heading text-4xl font-bold mb-3">Topology Analysis Results</h1>
+        <p className="font-body text-muted-foreground text-lg">
+          {summary.total_links} network links analyzed
+        </p>
+        <p className="font-body text-muted-foreground text-sm mt-1">
+          Processed: {formatDate(metadata.processedAt)}
         </p>
       </div>
 
-      {/* Summary Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {/* Total Links */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardDescription>Total Links</CardDescription>
-            <CardTitle className="text-4xl">{summary.total_links}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-muted-foreground">
-              Network connections analyzed
-            </p>
-          </CardContent>
-        </Card>
-
-        {/* Healthy Links */}
-        <Card className="border-green-200 bg-green-50">
-          <CardHeader className="pb-3">
-            <CardDescription className="text-green-800">Healthy Links</CardDescription>
-            <CardTitle className="text-4xl text-green-600">
+      {/* Big Cards Grid - Clickable */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Healthy Links Card */}
+        <Card
+          className="border-2 border-green-200 dark:border-green-900 bg-green-50 dark:bg-green-950/20 hover:shadow-xl transition-all cursor-pointer group"
+          onClick={() => router.push("/links?health_status=HEALTHY")}
+        >
+          <CardHeader className="pb-4">
+            <CardDescription className="text-green-800 dark:text-green-300 text-base font-semibold">
+              Healthy Links
+            </CardDescription>
+            <CardTitle className="text-6xl text-green-600 dark:text-green-400 font-bold">
               {summary.healthy}
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-xs text-green-700">
+          <CardContent className="space-y-3">
+            <p className="text-sm text-green-700 dark:text-green-300">
               {healthPercentage(summary.healthy)}% of total links
             </p>
-            <Badge variant="default" className="mt-2 bg-green-500">
-              HEALTHY
-            </Badge>
-          </CardContent>
-        </Card>
-
-        {/* Drift High Links */}
-        <Card className="border-red-200 bg-red-50">
-          <CardHeader className="pb-3">
-            <CardDescription className="text-red-800">High Drift</CardDescription>
-            <CardTitle className="text-4xl text-red-600">
-              {summary.drift_high}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-red-700">
-              {healthPercentage(summary.drift_high)}% of total links
+            <p className="text-sm text-green-600 dark:text-green-400 group-hover:underline">
+              Click to view all healthy links →
             </p>
-            <Badge variant="destructive" className="mt-2">
-              DRIFT_HIGH
-            </Badge>
           </CardContent>
         </Card>
 
-        {/* Missing Telemetry */}
-        <Card className="border-border bg-muted/50">
-          <CardHeader className="pb-3">
-            <CardDescription className="text-foreground">Missing Telemetry</CardDescription>
-            <CardTitle className="text-4xl text-muted-foreground">
-              {summary.missing_telemetry}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-muted-foreground">
-              {healthPercentage(summary.missing_telemetry)}% of total links
-            </p>
-            <Badge variant="secondary" className="mt-2">
-              NO TELEMETRY
-            </Badge>
-          </CardContent>
-        </Card>
-
-        {/* Missing IS-IS */}
-        <Card className="border-border bg-muted/50">
-          <CardHeader className="pb-3">
-            <CardDescription className="text-foreground">Missing IS-IS</CardDescription>
-            <CardTitle className="text-4xl text-muted-foreground">
+        {/* Missing IS-IS Card */}
+        <Card
+          className="border-2 border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/20 hover:shadow-xl transition-all cursor-pointer group"
+          onClick={() => router.push("/links?data_status=MISSING_ISIS")}
+        >
+          <CardHeader className="pb-4">
+            <CardDescription className="text-red-800 dark:text-red-300 text-base font-semibold">
+              Missing IS-IS Data
+            </CardDescription>
+            <CardTitle className="text-6xl text-red-600 dark:text-red-400 font-bold">
               {summary.missing_isis}
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-xs text-muted-foreground">
+          <CardContent className="space-y-3">
+            <p className="text-sm text-red-700 dark:text-red-300">
               {healthPercentage(summary.missing_isis)}% of total links
             </p>
-            <Badge variant="secondary" className="mt-2">
-              NO IS-IS
-            </Badge>
+            <p className="text-sm text-red-600 dark:text-red-400 group-hover:underline">
+              Click to view affected links →
+            </p>
           </CardContent>
         </Card>
 
-        {/* Processing Info */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardDescription>Processed At</CardDescription>
-            <CardTitle className="text-lg">
-              {formatDate(metadata.processedAt)}
+        {/* High Drift Card */}
+        <Card
+          className="border-2 border-orange-200 dark:border-orange-900 bg-orange-50 dark:bg-orange-950/20 hover:shadow-xl transition-all cursor-pointer group"
+          onClick={() => router.push("/links?health_status=DRIFT_HIGH")}
+        >
+          <CardHeader className="pb-4">
+            <CardDescription className="text-orange-800 dark:text-orange-300 text-base font-semibold">
+              High Drift Detected
+            </CardDescription>
+            <CardTitle className="text-6xl text-orange-600 dark:text-orange-400 font-bold">
+              {summary.drift_high}
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-xs text-muted-foreground">
-              Files: {metadata.snapshotKey.split('/').pop()?.substring(0, 20)}...
+          <CardContent className="space-y-3">
+            <p className="text-sm text-orange-700 dark:text-orange-300">
+              {healthPercentage(summary.drift_high)}% of total links
+            </p>
+            <p className="text-sm text-orange-600 dark:text-orange-400 group-hover:underline">
+              Click to view affected links →
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Missing Telemetry Card */}
+        <Card
+          className="border-2 border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/20 hover:shadow-xl transition-all cursor-pointer group"
+          onClick={() => router.push("/links?health_status=MISSING_TELEMETRY")}
+        >
+          <CardHeader className="pb-4">
+            <CardDescription className="text-gray-800 dark:text-gray-300 text-base font-semibold">
+              Missing Telemetry
+            </CardDescription>
+            <CardTitle className="text-6xl text-gray-600 dark:text-gray-400 font-bold">
+              {summary.missing_telemetry}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-gray-700 dark:text-gray-300">
+              {healthPercentage(summary.missing_telemetry)}% of total links
+            </p>
+            <p className="text-sm text-gray-600 dark:text-gray-400 group-hover:underline">
+              Click to view affected links →
             </p>
           </CardContent>
         </Card>
       </div>
 
-      {/* Health Status Overview */}
-      <Card>
+      {/* Quick Actions */}
+      <Card className="border-2">
         <CardHeader>
-          <CardTitle>Health Status Distribution</CardTitle>
-          <CardDescription>
-            Breakdown of network link health across all analyzed connections
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            {/* Health Bar Chart */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-sm">
-                <span className="font-medium text-green-600">Healthy</span>
-                <span className="text-muted-foreground">
-                  {summary.healthy} ({healthPercentage(summary.healthy)}%)
-                </span>
-              </div>
-              <div className="w-full bg-muted rounded-full h-3">
-                <div
-                  className="bg-green-500 dark:bg-green-600 h-3 rounded-full transition-all"
-                  style={{ width: `${healthPercentage(summary.healthy)}%` }}
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-sm">
-                <span className="font-medium text-red-600 dark:text-red-400">Drift High</span>
-                <span className="text-muted-foreground">
-                  {summary.drift_high} ({healthPercentage(summary.drift_high)}%)
-                </span>
-              </div>
-              <div className="w-full bg-muted rounded-full h-3">
-                <div
-                  className="bg-red-500 dark:bg-red-600 h-3 rounded-full transition-all"
-                  style={{ width: `${healthPercentage(summary.drift_high)}%` }}
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-sm">
-                <span className="font-medium text-muted-foreground">Missing Telemetry</span>
-                <span className="text-muted-foreground">
-                  {summary.missing_telemetry} ({healthPercentage(summary.missing_telemetry)}%)
-                </span>
-              </div>
-              <div className="w-full bg-muted rounded-full h-3">
-                <div
-                  className="bg-muted-foreground/50 h-3 rounded-full transition-all"
-                  style={{ width: `${healthPercentage(summary.missing_telemetry)}%` }}
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-sm">
-                <span className="font-medium text-muted-foreground">Missing IS-IS</span>
-                <span className="text-muted-foreground">
-                  {summary.missing_isis} ({healthPercentage(summary.missing_isis)}%)
-                </span>
-              </div>
-              <div className="w-full bg-muted rounded-full h-3">
-                <div
-                  className="bg-muted-foreground/50 h-3 rounded-full transition-all"
-                  style={{ width: `${healthPercentage(summary.missing_isis)}%` }}
-                />
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Action Buttons */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Analysis & Visualization</CardTitle>
-          <CardDescription>
-            Explore the topology data through interactive visualizations
-          </CardDescription>
+          <CardTitle className="text-xl">Quick Actions</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-4">
-          <Button onClick={() => router.push("/map")} size="lg">
-            View Geographic Map
+          <Button onClick={() => router.push("/map")} size="lg" className="text-base">
+            View Map
           </Button>
-          <Button onClick={() => router.push("/links")} variant="outline" size="lg">
-            View Links Table
+          <Button onClick={() => router.push("/links")} variant="outline" size="lg" className="text-base">
+            View All Links
           </Button>
-          <Button onClick={() => router.push("/upload")} variant="outline" size="lg">
+          <Button onClick={() => router.push("/upload")} variant="outline" size="lg" className="text-base">
             Upload New Files
           </Button>
         </CardContent>
