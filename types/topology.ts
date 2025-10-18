@@ -60,6 +60,12 @@ export interface TopologyLink {
   expected_delay_ns: number; // Expected delay in nanoseconds
   expected_delay_us: number; // Expected delay in microseconds
 
+  // Bandwidth
+  bandwidth_bps: number | null; // Raw bandwidth in bits per second
+  bandwidth_gbps: number | null; // Bandwidth in Gbps (computed from bps)
+  bandwidth_label: string; // Formatted display label (e.g., "100 Gbps")
+  bandwidth_tier: number; // Tier for grouping (0, 10, 50, 100, 200)
+
   // Telemetry (measured)
   measured_p50_us: number | null; // p50 percentile RTT in microseconds
   measured_p90_us: number | null; // p90 percentile RTT
@@ -94,6 +100,16 @@ export interface TopologyHealthSummary {
 }
 
 /**
+ * Bandwidth statistics summary
+ */
+export interface BandwidthStats {
+  total_capacity_gbps: number; // Sum of all link bandwidths
+  average_bandwidth_gbps: number; // Average link bandwidth
+  distribution: Record<number, number>; // Count by tier: {10: 69, 50: 1, 100: 17, 200: 1}
+  links_by_tier: Record<number, number>; // Same as distribution (for compatibility)
+}
+
+/**
  * Serviceability link data (from snapshot.json)
  * Source: fetch_data.dz_serviceability.links
  */
@@ -104,6 +120,7 @@ export interface ServiceabilityLink {
   side_a_iface_name: string;
   side_b_iface_name: string;
   delay_ns: number;
+  bandwidth: number; // Bandwidth in bits per second
   tunnel_net: string | null; // e.g., "172.16.0.222/31" - used for ISIS matching
   [key: string]: any; // Additional fields from JSON
 }

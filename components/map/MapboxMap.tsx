@@ -36,6 +36,8 @@ interface LinkProperties {
   isis_metric: number | null;
   drift_pct: number | null;
   health_status: string;
+  bandwidth_gbps: number | null;
+  bandwidth_label: string;
   color: string;
   width: number;
   opacity: number;
@@ -61,15 +63,86 @@ const MAP_STYLE_LIGHT = "https://basemaps.cartocdn.com/gl/positron-gl-style/styl
 const MAP_STYLE_DARK = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 
 function getLineWidth(link: TopologyLink): number {
-  // Make MISSING_ISIS links more prominent (thicker arcs)
-  if (link.data_status === "MISSING_ISIS") {
-    return 5; // Thicker for high priority alert
+  // Base width determined by bandwidth tier
+  let baseWidth = 2; // Default
+
+  // Use bandwidth_gbps to determine width
+  const gbps = link.bandwidth_gbps;
+  if (gbps !== null) {
+    if (gbps >= 200) {
+      baseWidth = 10; // 200+ Gbps
+    } else if (gbps >= 100) {
+      baseWidth = 8; // 100-200 Gbps
+    } else if (gbps >= 50) {
+      baseWidth = 5; // 50-100 Gbps
+    } else {
+      baseWidth = 3; // < 50 Gbps
+    }
   }
-  return 2; // Default width
+
+  // Make MISSING_ISIS links slightly more prominent (add 1px)
+  if (link.data_status === "MISSING_ISIS") {
+    baseWidth += 1;
+  }
+
+  return baseWidth;
 }
 
 function getLineOpacity(link: TopologyLink): number {
   return link.health_status === "HEALTHY" ? 0.6 : 0.9;
+}
+
+/**
+ * Get link color based on health status and bandwidth tier
+ * Priority: Health issues override bandwidth colors for visibility
+ *
+ * Healthy links (color by bandwidth):
+ * - 10 Gbps: Light green (#22c55e)
+ * - 50 Gbps: Medium teal (#14b8a6)
+ * - 100 Gbps: Dark teal (#0d9488)
+ * - 200+ Gbps: Deep sky blue (#0284c7)
+ *
+ * Unhealthy links (color by health status):
+ * - DRIFT_HIGH: Orange (#f97316)
+ * - MISSING_TELEMETRY: Yellow (#eab308)
+ * - MISSING_ISIS: Red (#ef4444)
+ * - No data: Gray (#94a3b8)
+ */
+function getLinkColor(link: TopologyLink): string {
+  // Health issues take precedence (for visibility)
+  if (link.health_status === "DRIFT_HIGH") {
+    return "#f97316"; // orange-500
+  }
+
+  if (link.health_status === "MISSING_TELEMETRY") {
+    return "#eab308"; // yellow-500
+  }
+
+  if (link.health_status === "MISSING_ISIS") {
+    return "#ef4444"; // red-500
+  }
+
+  // For healthy links, color by bandwidth tier
+  if (link.health_status === "HEALTHY") {
+    const gbps = link.bandwidth_gbps;
+
+    if (gbps === null) {
+      return "#94a3b8"; // slate-400 (no bandwidth data)
+    }
+
+    if (gbps >= 200) {
+      return "#0284c7"; // sky-600 (200+ Gbps) - Deep blue
+    } else if (gbps >= 100) {
+      return "#0d9488"; // teal-600 (100-200 Gbps) - Dark teal
+    } else if (gbps >= 50) {
+      return "#14b8a6"; // teal-500 (50-100 Gbps) - Medium teal
+    } else {
+      return "#22c55e"; // green-500 (< 50 Gbps) - Light green
+    }
+  }
+
+  // Fallback to gray for unknown states
+  return "#94a3b8"; // slate-400
 }
 
 function linksToGeoJSON(
@@ -88,9 +161,8 @@ function linksToGeoJSON(
         ? generateGeodesicArc(sourceCoords, targetCoords)
         : [sourceCoords, targetCoords];
 
-      // Use data_status for coloring (prioritizes missing ISIS detection)
-      const statusColor = getDataStatusColor(link.data_status);
-      const hexColor = rgbToHex(statusColor);
+      // Use bandwidth + health status for coloring
+      const hexColor = getLinkColor(link);
 
       const isSelected = link.link_pk === selectedLinkPk;
       const isHovered = link.link_pk === hoveredLinkPk;
@@ -129,6 +201,8 @@ function linksToGeoJSON(
           isis_metric: link.isis_metric,
           drift_pct: link.drift_pct,
           health_status: link.health_status,
+          bandwidth_gbps: link.bandwidth_gbps,
+          bandwidth_label: link.bandwidth_label,
           color: hexColor,
           width,
           opacity,
@@ -230,6 +304,8 @@ export function MapboxMap({
           isis_metric: link.isis_metric,
           drift_pct: link.drift_pct,
           health_status: link.health_status,
+          bandwidth_gbps: link.bandwidth_gbps,
+          bandwidth_label: link.bandwidth_label,
           color: '#000000', // Placeholder, not used in pinned panel
           width: 2,         // Placeholder, not used in pinned panel
           opacity: 1,       // Placeholder, not used in pinned panel
@@ -501,6 +577,12 @@ export function MapboxMap({
                     }`}
                   >
                     {hoveredLink.health_status.replace('_', ' ')}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+                  <span className="text-muted-foreground">Bandwidth:</span>
+                  <span className="font-semibold text-foreground">
+                    {hoveredLink.bandwidth_label || 'N/A'}
                   </span>
                 </div>
                 {hoveredLink.drift_pct !== null && (

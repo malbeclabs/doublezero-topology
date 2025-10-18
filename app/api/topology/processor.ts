@@ -7,6 +7,12 @@
 
 import type { TopologyLink, TopologyHealthSummary, Location } from "@/types/topology";
 import { classifyDataCompleteness } from "@/lib/topology/data-completeness";
+import {
+  parseBandwidthToGbps,
+  formatBandwidth,
+  getBandwidthTier,
+} from "@/lib/parsers/bandwidth";
+import { calculateBandwidthStats } from "@/lib/topology/bandwidth-stats";
 
 // Import helper functions from the route file
 // These are the same functions used in the original implementation
@@ -238,6 +244,12 @@ export async function processTopologyData(snapshotData: any, isisData: any) {
       driftPct = (Math.abs(measuredP50 - expectedDelayUs) / expectedDelayUs) * 100;
     }
 
+    // Extract bandwidth
+    const bandwidthBps = link.bandwidth as number | null;
+    const bandwidthGbps = parseBandwidthToGbps(bandwidthBps);
+    const bandwidthLabel = formatBandwidth(bandwidthGbps);
+    const bandwidthTier = getBandwidthTier(bandwidthGbps);
+
     // Determine data availability
     const hasTelemetry = measuredP50 != null && samples.length > 0;
     const hasIsis = isisMetric != null;
@@ -280,6 +292,10 @@ export async function processTopologyData(snapshotData: any, isisData: any) {
       side_b_iface_name: link.side_z_iface_name as string,
       expected_delay_ns: delayNs,
       expected_delay_us: expectedDelayUs,
+      bandwidth_bps: bandwidthBps,
+      bandwidth_gbps: bandwidthGbps,
+      bandwidth_label: bandwidthLabel,
+      bandwidth_tier: bandwidthTier,
       measured_p50_us: measuredP50,
       measured_p90_us: measuredP90,
       measured_p95_us: measuredP95,
@@ -338,10 +354,14 @@ export async function processTopologyData(snapshotData: any, isisData: any) {
     missing_isis: missingIsisCount,
   };
 
+  // Calculate bandwidth statistics
+  const bandwidthStats = calculateBandwidthStats(topology);
+
   return {
     topology,
     locations,
     summary,
+    bandwidth_stats: bandwidthStats,
     processedAt: new Date().toISOString(),
   };
 }

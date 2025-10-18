@@ -143,6 +143,41 @@ export function LinksTable({ data }: LinksTableProps) {
       },
     },
     {
+      accessorKey: "bandwidth_gbps",
+      header: "Bandwidth",
+      cell: ({ row }) => {
+        const bandwidth = row.original.bandwidth_label;
+        const gbps = row.getValue("bandwidth_gbps") as number | null;
+
+        if (!bandwidth || gbps === null) {
+          return <span className="text-muted-foreground">N/A</span>;
+        }
+
+        // Color code by bandwidth tier
+        let colorClass = "text-foreground";
+        if (gbps >= 200) {
+          colorClass = "text-sky-600 dark:text-sky-400"; // Deep blue
+        } else if (gbps >= 100) {
+          colorClass = "text-teal-600 dark:text-teal-400"; // Dark teal
+        } else if (gbps >= 50) {
+          colorClass = "text-teal-500 dark:text-teal-500"; // Medium teal
+        } else {
+          colorClass = "text-green-500 dark:text-green-400"; // Light green
+        }
+
+        return (
+          <span className={`font-semibold ${colorClass}`}>
+            {bandwidth}
+          </span>
+        );
+      },
+      sortingFn: (rowA, rowB) => {
+        const a = rowA.original.bandwidth_gbps ?? -1;
+        const b = rowB.original.bandwidth_gbps ?? -1;
+        return a - b;
+      },
+    },
+    {
       accessorKey: "expected_delay_us",
       header: "Expected Delay",
       cell: ({ row }) => formatDelay(row.getValue("expected_delay_us")),
