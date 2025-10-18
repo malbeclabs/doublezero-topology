@@ -29,9 +29,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { TopologyLink, HealthStatus } from "@/types/topology";
+import { TopologyLink, HealthStatus, DataCompleteness } from "@/types/topology";
 import { HealthStatusBadge } from "./HealthStatusBadge";
+import { DataStatusBadge } from "./DataStatusBadge";
 import { useTableStore } from "@/lib/stores/table-store";
+import { useRouter, useSearchParams } from "next/navigation";
+import { MapPin, X } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 
 interface LinksTableProps {
   data: TopologyLink[];
@@ -51,10 +55,59 @@ export function LinksTable({ data }: LinksTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
   const [globalFilter, setGlobalFilter] = React.useState("");
+  const router = useRouter();
+  const searchParams = useSearchParams();
 
   const { selectedLinkPk, setSelectedLink, setHoveredLink } = useTableStore();
 
+  // Prefetch map page for faster navigation
+  React.useEffect(() => {
+    router.prefetch('/map');
+  }, [router]);
+
+  // Apply filters from URL params on mount
+  React.useEffect(() => {
+    const healthStatus = searchParams.get('health_status');
+    const dataStatus = searchParams.get('data_status');
+
+    const filters: ColumnFiltersState = [];
+
+    if (healthStatus) {
+      filters.push({ id: 'health_status', value: healthStatus });
+    }
+
+    if (dataStatus) {
+      filters.push({ id: 'data_status', value: dataStatus });
+    }
+
+    if (filters.length > 0) {
+      setColumnFilters(filters);
+    }
+  }, [searchParams]);
+
+  const handleViewOnMap = (linkPk: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent row click
+    setSelectedLink(linkPk);
+    router.push(`/map?link_pk=${encodeURIComponent(linkPk)}`);
+  };
+
   const columns: ColumnDef<TopologyLink>[] = [
+    {
+      id: "view_on_map",
+      header: "",
+      cell: ({ row }) => (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={(e) => handleViewOnMap(row.original.link_pk, e)}
+          className="h-8 w-8 p-0 hover:bg-blue-500/10 hover:text-blue-500"
+          title="View on map"
+        >
+          <MapPin className="h-4 w-4" />
+        </Button>
+      ),
+      enableSorting: false,
+    },
     {
       accessorKey: "device_a_code",
       header: "Source Device",
@@ -74,6 +127,16 @@ export function LinksTable({ data }: LinksTableProps) {
       header: "Health Status",
       cell: ({ row }) => (
         <HealthStatusBadge status={row.getValue("health_status")} />
+      ),
+      filterFn: (row, id, value) => {
+        return value === "ALL" || row.getValue(id) === value;
+      },
+    },
+    {
+      accessorKey: "data_status",
+      header: "Data Status",
+      cell: ({ row }) => (
+        <DataStatusBadge status={row.getValue("data_status")} />
       ),
       filterFn: (row, id, value) => {
         return value === "ALL" || row.getValue(id) === value;
@@ -148,10 +211,53 @@ export function LinksTable({ data }: LinksTableProps) {
   };
 
   const healthStatusFilter = table.getColumn("health_status")?.getFilterValue() as string | undefined;
+  const dataStatusFilter = table.getColumn("data_status")?.getFilterValue() as string | undefined;
+
+  const clearAllFilters = () => {
+    setColumnFilters([]);
+    router.push('/links');
+  };
+
+  const hasActiveFilters = healthStatusFilter || dataStatusFilter;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-4">
+      {/* Active Filters Badge */}
+      {hasActiveFilters && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900 rounded-lg">
+          <span className="text-sm font-medium text-blue-900 dark:text-blue-300">
+            Active filters:
+          </span>
+          {healthStatusFilter && (
+            <Badge variant="secondary" className="gap-1">
+              Health: {healthStatusFilter.replace('_', ' ')}
+              <X
+                className="h-3 w-3 cursor-pointer hover:text-destructive"
+                onClick={() => table.getColumn("health_status")?.setFilterValue(undefined)}
+              />
+            </Badge>
+          )}
+          {dataStatusFilter && (
+            <Badge variant="secondary" className="gap-1">
+              Data: {dataStatusFilter.replace('_', ' ')}
+              <X
+                className="h-3 w-3 cursor-pointer hover:text-destructive"
+                onClick={() => table.getColumn("data_status")?.setFilterValue(undefined)}
+              />
+            </Badge>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={clearAllFilters}
+            className="h-6 px-2 text-xs ml-auto"
+          >
+            Clear all
+          </Button>
+        </div>
+      )}
+
+      <div className="flex items-center gap-4 flex-wrap">
         <Input
           placeholder="Search links, devices..."
           value={globalFilter}
@@ -166,14 +272,32 @@ export function LinksTable({ data }: LinksTableProps) {
           }
         >
           <SelectTrigger className="w-[200px]">
-            <SelectValue placeholder="Filter by status" />
+            <SelectValue placeholder="Filter by health" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="ALL">All Status</SelectItem>
+            <SelectItem value="ALL">All Health Status</SelectItem>
             <SelectItem value="HEALTHY">Healthy</SelectItem>
             <SelectItem value="DRIFT_HIGH">Drift High</SelectItem>
             <SelectItem value="MISSING_TELEMETRY">Missing Telemetry</SelectItem>
             <SelectItem value="MISSING_ISIS">Missing IS-IS</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select
+          value={dataStatusFilter ?? "ALL"}
+          onValueChange={(value) =>
+            table.getColumn("data_status")?.setFilterValue(value === "ALL" ? undefined : value)
+          }
+        >
+          <SelectTrigger className="w-[200px]">
+            <SelectValue placeholder="Filter by data" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ALL">All Data Status</SelectItem>
+            <SelectItem value="COMPLETE">Complete</SelectItem>
+            <SelectItem value="MISSING_ISIS">Missing IS-IS</SelectItem>
+            <SelectItem value="MISSING_TELEMETRY">Missing Telemetry</SelectItem>
+            <SelectItem value="MISSING_BOTH">Missing Both</SelectItem>
           </SelectContent>
         </Select>
 

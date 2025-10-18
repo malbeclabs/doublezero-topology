@@ -4,6 +4,7 @@
  * Displays a sortable, filterable data table of all network topology links.
  */
 
+import { Suspense } from "react";
 import { LinksTable } from "@/components/links/LinksTable";
 import type { TopologyLink } from "@/types/topology";
 
@@ -52,7 +53,14 @@ export default async function LinksPage() {
 
         {/* Links Table */}
         {links.length > 0 ? (
-          <LinksTable data={links} />
+          <Suspense fallback={
+            <div className="text-center py-12">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-foreground mx-auto"></div>
+              <p className="text-muted-foreground mt-4">Loading table...</p>
+            </div>
+          }>
+            <LinksTable data={links} />
+          </Suspense>
         ) : (
           <div className="text-center py-12 text-muted-foreground">
             No topology data available. Check that data files exist in /data directory.

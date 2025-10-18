@@ -8,8 +8,8 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { useTheme } from "next-themes";
 import { X } from "lucide-react";
 
-import type { TopologyLink, Location, HealthStatus } from "@/types/topology";
-import { getHealthColor, rgbToHex } from "@/types/topology";
+import type { TopologyLink, Location, HealthStatus, DataCompleteness } from "@/types/topology";
+import { getHealthColor, rgbToHex, getDataStatusColor } from "@/types/topology";
 import { generateGeodesicArc, shouldUseGeodesicArc } from "@/lib/geodesic";
 import { useTableStore } from "@/lib/stores/table-store";
 
@@ -61,7 +61,11 @@ const MAP_STYLE_LIGHT = "https://basemaps.cartocdn.com/gl/positron-gl-style/styl
 const MAP_STYLE_DARK = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 
 function getLineWidth(link: TopologyLink): number {
-  return 2;
+  // Make MISSING_ISIS links more prominent (thicker arcs)
+  if (link.data_status === "MISSING_ISIS") {
+    return 5; // Thicker for high priority alert
+  }
+  return 2; // Default width
 }
 
 function getLineOpacity(link: TopologyLink): number {
@@ -84,8 +88,9 @@ function linksToGeoJSON(
         ? generateGeodesicArc(sourceCoords, targetCoords)
         : [sourceCoords, targetCoords];
 
-      const healthColor = getHealthColor(link.health_status);
-      const hexColor = rgbToHex(healthColor);
+      // Use data_status for coloring (prioritizes missing ISIS detection)
+      const statusColor = getDataStatusColor(link.data_status);
+      const hexColor = rgbToHex(statusColor);
 
       const isSelected = link.link_pk === selectedLinkPk;
       const isHovered = link.link_pk === hoveredLinkPk;
@@ -170,11 +175,13 @@ export function MapboxMap({
   showNodes = true,
 }: MapboxMapProps) {
   const mapRef = useRef<MapRef>(null);
+  const lastZoomedLinkPk = useRef<string | null>(null);
   const [hoveredLink, setHoveredLink] = useState<LinkProperties | null>(null);
   const [hoveredNode, setHoveredNode] = useState<NodeProperties | null>(null);
   const [cursorPosition, setCursorPosition] = useState<{ x: number; y: number } | null>(null);
   const [pinnedLink, setPinnedLink] = useState<LinkProperties | null>(null);
   const [pinnedNode, setPinnedNode] = useState<NodeProperties | null>(null);
+  const [mapReady, setMapReady] = useState(false);
 
   const { resolvedTheme } = useTheme();
   const { selectedLinkPk, hoveredLinkPk, setSelectedLink, setHoveredLink: setHoveredLinkStore } = useTableStore();
@@ -204,40 +211,120 @@ export function MapboxMap({
     if (!selectedLinkPk) {
       setPinnedLink(null);
       setPinnedNode(null);
+    } else {
+      // When a link is selected (e.g., from table navigation), show its details panel
+      const link = links.find(l => l.link_pk === selectedLinkPk);
+      if (link) {
+        const linkProps: LinkProperties = {
+          link_pk: link.link_pk,
+          link_code: link.link_code,
+          location_a: link.device_a_location_name,
+          location_z: link.device_z_location_name,
+          device_a: link.device_a_code,
+          device_z: link.device_z_code,
+          expected_delay_us: link.expected_delay_us,
+          measured_p50_us: link.measured_p50_us,
+          measured_p90_us: link.measured_p90_us,
+          measured_p95_us: link.measured_p95_us,
+          measured_p99_us: link.measured_p99_us,
+          isis_metric: link.isis_metric,
+          drift_pct: link.drift_pct,
+          health_status: link.health_status,
+          color: '#000000', // Placeholder, not used in pinned panel
+          width: 2,         // Placeholder, not used in pinned panel
+          opacity: 1,       // Placeholder, not used in pinned panel
+        };
+        setPinnedLink(linkProps);
+        setPinnedNode(null);
+      }
     }
-  }, [selectedLinkPk]);
+  }, [selectedLinkPk, links]);
 
   useEffect(() => {
-    if (!selectedLinkPk || !mapRef.current) return;
+    // Only auto-zoom if this is a new link selection (not already zoomed to this link)
+    if (!selectedLinkPk || !mapRef.current || !mapReady) {
+      // Reset tracking when no link is selected
+      if (!selectedLinkPk) {
+        lastZoomedLinkPk.current = null;
+      }
+      return;
+    }
+
+    // Skip if we've already zoomed to this link
+    if (lastZoomedLinkPk.current === selectedLinkPk) {
+      return;
+    }
 
     const link = links.find(l => l.link_pk === selectedLinkPk);
     if (!link) return;
 
-    const startLon = link.device_a_lon;
-    const startLat = link.device_a_lat;
-    const endLon = link.device_z_lon;
-    const endLat = link.device_z_lat;
+    const map = mapRef.current.getMap();
+    if (!map) return;
 
-    const minLon = Math.min(startLon, endLon);
-    const maxLon = Math.max(startLon, endLon);
-    const minLat = Math.min(startLat, endLat);
-    const maxLat = Math.max(startLat, endLat);
+    // Wait for map to be fully loaded before zooming
+    const performZoom = () => {
+      const startLon = link.device_a_lon;
+      const startLat = link.device_a_lat;
+      const endLon = link.device_z_lon;
+      const endLat = link.device_z_lat;
 
-    const lonPadding = (maxLon - minLon) * 0.1 || 1;
-    const latPadding = (maxLat - minLat) * 0.1 || 1;
+      const minLon = Math.min(startLon, endLon);
+      const maxLon = Math.max(startLon, endLon);
+      const minLat = Math.min(startLat, endLat);
+      const maxLat = Math.max(startLat, endLat);
 
-    mapRef.current.fitBounds(
-      [
-        [minLon - lonPadding, minLat - latPadding],
-        [maxLon + lonPadding, maxLat + latPadding],
-      ],
-      {
-        padding: 40,
-        duration: 1000,
-        maxZoom: 8,
-      }
-    );
-  }, [selectedLinkPk, links]);
+      const lonDiff = maxLon - minLon;
+      const latDiff = maxLat - minLat;
+
+      // For same-location links (or very close), use a small fixed padding
+      // Otherwise use 10% of the distance as padding
+      const lonPadding = lonDiff < 0.01 ? 0.05 : lonDiff * 0.1;
+      const latPadding = latDiff < 0.01 ? 0.05 : latDiff * 0.1;
+
+      mapRef.current?.fitBounds(
+        [
+          [minLon - lonPadding, minLat - latPadding],
+          [maxLon + lonPadding, maxLat + latPadding],
+        ],
+        {
+          padding: 80,
+          duration: 1000,
+          maxZoom: 10,
+        }
+      );
+
+      // Mark this link as zoomed
+      lastZoomedLinkPk.current = selectedLinkPk;
+    };
+
+    // If map is already loaded, zoom immediately
+    const isLoaded = map.isStyleLoaded() && map.loaded();
+
+    if (isLoaded) {
+      performZoom();
+    } else {
+      // The map may be loading or the load event already fired
+      // Try both: wait for load event AND use a timeout as fallback
+      let hasZoomed = false;
+
+      const zoomOnce = () => {
+        if (!hasZoomed) {
+          hasZoomed = true;
+          performZoom();
+        }
+      };
+
+      // Listen for load event
+      map.once('load', zoomOnce);
+
+      // Also try after a short delay as fallback
+      setTimeout(() => {
+        if (!hasZoomed && map.isStyleLoaded()) {
+          zoomOnce();
+        }
+      }, 500);
+    }
+  }, [selectedLinkPk, links, mapReady]);
 
   const lineLayer: LayerProps = {
     id: "network-links",
@@ -367,6 +454,7 @@ export function MapboxMap({
         attributionControl={false}
         onClick={handleMapClick}
         onMouseMove={handleMouseMove}
+        onLoad={() => setMapReady(true)}
         interactiveLayerIds={["network-links", "network-nodes"]}
       >
         <Source id="links" type="geojson" data={linksGeoJSON}>
