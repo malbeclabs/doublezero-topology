@@ -1,9 +1,11 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { Search, X } from "lucide-react";
+import { useState, useMemo, useEffect, useRef } from "react";
+import { Search, X, Link2, MapPin } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import type { TopologyLink, Location } from "@/types/topology";
 import { useTableStore } from "@/lib/stores/table-store";
+import { useMapFilterStore } from "@/lib/stores/map-filter-store";
 
 interface MapSearchProps {
   links: TopologyLink[];
@@ -12,17 +14,15 @@ interface MapSearchProps {
 
 export function MapSearch({ links, locations }: MapSearchProps) {
   const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState("");
+  const [focusedIndex, setFocusedIndex] = useState(-1);
   const { selectedLinkPk, setSelectedLink } = useTableStore();
-
-  const selectedLink = selectedLinkPk
-    ? links.find(link => link.link_pk === selectedLinkPk)
-    : null;
+  const { searchQuery, setSearchQuery } = useMapFilterStore();
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const searchResults = useMemo(() => {
-    if (!search) return { links: [], locations: [] };
+    if (!searchQuery) return { links: [], locations: [] };
 
-    const searchLower = search.toLowerCase();
+    const searchLower = searchQuery.toLowerCase();
 
     const matchedLinks = links.filter(link =>
       link.link_code.toLowerCase().includes(searchLower) ||
@@ -38,134 +38,256 @@ export function MapSearch({ links, locations }: MapSearchProps) {
     ).slice(0, 10);
 
     return { links: matchedLinks, locations: matchedLocations };
-  }, [search, links, locations]);
+  }, [searchQuery, links, locations]);
+
+  const totalResults = searchResults.links.length + searchResults.locations.length;
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setOpen(false);
+        setFocusedIndex(-1);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Keyboard navigation
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!open) {
+      if (e.key === "Enter" && searchQuery) {
+        setOpen(true);
+      }
+      return;
+    }
+
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        setFocusedIndex(prev =>
+          prev < totalResults - 1 ? prev + 1 : prev
+        );
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        setFocusedIndex(prev => prev > 0 ? prev - 1 : prev);
+        break;
+      case "Enter":
+        e.preventDefault();
+        if (focusedIndex >= 0) {
+          handleSelectByIndex(focusedIndex);
+        }
+        break;
+      case "Escape":
+        e.preventDefault();
+        setOpen(false);
+        setFocusedIndex(-1);
+        break;
+    }
+  };
+
+  const handleSelectByIndex = (index: number) => {
+    if (index < searchResults.links.length) {
+      const link = searchResults.links[index];
+      handleSelectLink(link.link_pk);
+    } else {
+      // Location selected - just close dropdown
+      setOpen(false);
+      setSearchQuery("");
+      setFocusedIndex(-1);
+    }
+  };
 
   const handleSelectLink = (linkPk: string) => {
     setSelectedLink(linkPk);
     setOpen(false);
-    setSearch("");
+    setSearchQuery("");
+    setFocusedIndex(-1);
   };
 
   const handleClear = () => {
-    setSearch("");
+    setSearchQuery("");
     setSelectedLink(null);
     setOpen(false);
+    setFocusedIndex(-1);
   };
 
   return (
-    <div className="space-y-2">
-      <div className="relative">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+    <div
+      ref={containerRef}
+      className="absolute top-6 left-6 z-30 w-[420px] max-w-[calc(100vw-48px)]"
+    >
+      {/* Search Input */}
+      <div className="relative group">
+        <div className={`
+          bg-background/95 backdrop-blur-sm
+          border border-border rounded-xl
+          shadow-lg hover:shadow-xl
+          transition-all duration-200
+          ${open ? 'ring-2 ring-primary/20 border-primary' : ''}
+        `}>
+          {/* Search Icon */}
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground pointer-events-none" />
+
+          {/* Input */}
           <input
             type="text"
             placeholder="Search links or locations..."
-            className="w-full pl-10 pr-10 py-2 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-            value={search}
+            role="combobox"
+            aria-expanded={open}
+            aria-autocomplete="list"
+            aria-controls="search-results"
+            className="w-full h-12 pl-12 pr-12 bg-transparent border-0 rounded-xl text-base focus:outline-none placeholder:text-muted-foreground"
+            value={searchQuery}
             onChange={(e) => {
-              setSearch(e.target.value);
+              setSearchQuery(e.target.value);
               setOpen(e.target.value.length > 0);
+              setFocusedIndex(-1);
             }}
-            onFocus={() => setOpen(search.length > 0)}
+            onFocus={() => setOpen(searchQuery.length > 0)}
+            onKeyDown={handleKeyDown}
           />
-          {(search || selectedLinkPk) && (
+
+          {/* Clear Button */}
+          {searchQuery && (
             <button
               onClick={handleClear}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              title={selectedLinkPk ? "Clear selection" : "Clear search"}
+              className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+              title="Clear search"
+              aria-label="Clear search"
             >
               <X className="h-4 w-4" />
             </button>
           )}
         </div>
 
-      {open && (search.length > 0) && (
-        <div className="absolute top-full mt-2 w-full rounded-lg border border-border bg-background shadow-lg z-50 max-h-[400px] overflow-auto">
-          {searchResults.links.length === 0 && searchResults.locations.length === 0 ? (
-            <div className="p-4 text-sm text-muted-foreground text-center">
-              No results found.
-            </div>
-          ) : (
-            <div className="py-2">
-              {searchResults.links.length > 0 && (
-                <div className="mb-2">
-                  <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase">
-                    Links
-                  </div>
-                  {searchResults.links.map((link) => (
-                    <div
-                      key={link.link_pk}
-                      onClick={() => handleSelectLink(link.link_pk)}
-                      className="px-3 py-2 hover:bg-accent cursor-pointer transition-colors"
-                    >
-                      <div className="font-medium text-sm">
-                        {link.device_a_code} → {link.device_z_code}
-                      </div>
-                      <div className="text-xs text-muted-foreground mt-0.5">
-                        {link.device_a_location_name} → {link.device_z_location_name}
-                      </div>
-                      <div className="text-xs text-muted-foreground font-mono mt-0.5">
-                        {link.link_code}
-                      </div>
+        {/* Results Dropdown */}
+        {open && searchQuery.length > 0 && (
+          <div
+            id="search-results"
+            role="listbox"
+            className="
+              absolute top-[calc(100%+8px)] left-0 right-0
+              bg-background/95 backdrop-blur-sm
+              border border-border rounded-xl
+              shadow-xl
+              max-h-[400px] overflow-y-auto
+              animate-in slide-in-from-top-2 fade-in-0 duration-200
+            "
+          >
+            {searchResults.links.length === 0 && searchResults.locations.length === 0 ? (
+              <div className="px-4 py-8 text-center">
+                <Search className="h-8 w-8 mx-auto mb-2 opacity-50 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">No results found for &ldquo;{searchQuery}&rdquo;</p>
+                <p className="text-xs text-muted-foreground mt-1">Try searching for a device, location, or link</p>
+              </div>
+            ) : (
+              <div className="py-2">
+                {/* Links Section */}
+                {searchResults.links.length > 0 && (
+                  <div className="mb-2">
+                    <div className="px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide bg-muted/30">
+                      Links
                     </div>
-                  ))}
-                </div>
-              )}
+                    {searchResults.links.map((link, index) => (
+                      <button
+                        key={link.link_pk}
+                        role="option"
+                        aria-selected={index === focusedIndex}
+                        onClick={() => handleSelectLink(link.link_pk)}
+                        className={`
+                          w-full px-4 py-3
+                          text-left
+                          hover:bg-accent/50
+                          transition-colors
+                          border-b border-border last:border-0
+                          focus:bg-accent focus:outline-none
+                          ${index === focusedIndex ? 'bg-accent' : ''}
+                        `}
+                      >
+                        <div className="flex items-center gap-3">
+                          {/* Icon */}
+                          <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+                            <Link2 className="h-4 w-4 text-primary" />
+                          </div>
 
-              {searchResults.locations.length > 0 && (
-                <div>
-                  <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase">
-                    Locations
+                          {/* Content */}
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium truncate text-sm">
+                              {link.device_a_code} → {link.device_z_code}
+                            </div>
+                            <div className="text-xs text-muted-foreground truncate">
+                              {link.device_a_location_name} → {link.device_z_location_name}
+                            </div>
+                          </div>
+
+                          {/* Badge */}
+                          {link.bandwidth_label && (
+                            <Badge variant="secondary" className="flex-shrink-0 text-xs">
+                              {link.bandwidth_label}
+                            </Badge>
+                          )}
+                        </div>
+                      </button>
+                    ))}
                   </div>
-                  {searchResults.locations.map((location) => (
-                    <div
-                      key={location.location_pk}
-                      onClick={() => {
-                        setOpen(false);
-                        setSearch("");
-                      }}
-                      className="px-3 py-2 hover:bg-accent cursor-pointer transition-colors"
-                    >
-                      <div className="font-medium text-sm">{location.name}</div>
-                      <div className="text-xs text-muted-foreground mt-0.5">
-                        {location.code} • {location.device_count} devices
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-      </div>
+                )}
 
-      {selectedLink && (
-        <div className="rounded-lg border border-border bg-background/95 backdrop-blur-sm p-3 shadow-md">
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex-1 min-w-0">
-              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
-                Viewing Link
+                {/* Locations Section */}
+                {searchResults.locations.length > 0 && (
+                  <div>
+                    <div className="px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide bg-muted/30">
+                      Locations
+                    </div>
+                    {searchResults.locations.map((location, index) => {
+                      const globalIndex = searchResults.links.length + index;
+                      return (
+                        <button
+                          key={location.location_pk}
+                          role="option"
+                          aria-selected={globalIndex === focusedIndex}
+                          onClick={() => {
+                            setOpen(false);
+                            setSearchQuery("");
+                            setFocusedIndex(-1);
+                          }}
+                          className={`
+                            w-full px-4 py-3
+                            text-left
+                            hover:bg-accent/50
+                            transition-colors
+                            border-b border-border last:border-0
+                            focus:bg-accent focus:outline-none
+                            ${globalIndex === focusedIndex ? 'bg-accent' : ''}
+                          `}
+                        >
+                          <div className="flex items-center gap-3">
+                            {/* Icon */}
+                            <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+                              <MapPin className="h-4 w-4 text-primary" />
+                            </div>
+
+                            {/* Content */}
+                            <div className="flex-1 min-w-0">
+                              <div className="font-medium truncate text-sm">{location.name}</div>
+                              <div className="text-xs text-muted-foreground truncate">
+                                {location.code} • {location.device_count} devices
+                              </div>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-              <div className="font-semibold text-sm text-foreground mb-1">
-                {selectedLink.device_a_code} → {selectedLink.device_z_code}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {selectedLink.device_a_location_name} → {selectedLink.device_z_location_name}
-              </div>
-            </div>
-            <div className={`px-2 py-1 rounded text-xs font-semibold uppercase tracking-wide whitespace-nowrap ${
-              selectedLink.health_status === 'HEALTHY'
-                ? 'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400'
-                : selectedLink.health_status === 'DRIFT_HIGH'
-                ? 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400'
-                : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'
-            }`}>
-              {selectedLink.health_status.replace('_', ' ')}
-            </div>
+            )}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

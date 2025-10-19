@@ -12,6 +12,7 @@ import type { TopologyLink, Location, HealthStatus, DataCompleteness } from "@/t
 import { getHealthColor, rgbToHex, getDataStatusColor } from "@/types/topology";
 import { generateGeodesicArc, shouldUseGeodesicArc } from "@/lib/geodesic";
 import { useTableStore } from "@/lib/stores/table-store";
+import { ZoomControls } from "./ZoomControls";
 
 interface MapboxMapProps {
   links: TopologyLink[];
@@ -738,6 +739,12 @@ export function MapboxMap({
                     {pinnedLink.health_status.replace('_', ' ')}
                   </span>
                 </div>
+                <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+                  <span className="text-muted-foreground">Bandwidth:</span>
+                  <span className="font-semibold text-foreground">
+                    {pinnedLink.bandwidth_label || 'N/A'}
+                  </span>
+                </div>
                 {pinnedLink.drift_pct !== null && (
                   <div className="flex justify-between items-center py-1.5 border-b border-border/50">
                     <span className="text-muted-foreground">Drift:</span>
@@ -845,6 +852,9 @@ export function MapboxMap({
           )}
         </div>
       )}
+
+      {/* Zoom Controls (bottom-right) */}
+      <ZoomControls mapRef={mapRef} />
     </div>
   );
 }

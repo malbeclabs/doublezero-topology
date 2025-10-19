@@ -36,6 +36,7 @@ import { useTableStore } from "@/lib/stores/table-store";
 import { useRouter, useSearchParams } from "next/navigation";
 import { MapPin, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { getBandwidthTier } from "@/lib/parsers/bandwidth";
 
 interface LinksTableProps {
   data: TopologyLink[];
@@ -59,6 +60,16 @@ export function LinksTable({ data }: LinksTableProps) {
   const searchParams = useSearchParams();
 
   const { selectedLinkPk, setSelectedLink, setHoveredLink } = useTableStore();
+
+  // Auto-detect unique bandwidth values from data
+  const uniqueBandwidths = React.useMemo(() => {
+    const tiersSet = new Set<number>();
+    data.forEach(link => {
+      const tier = getBandwidthTier(link.bandwidth_gbps);
+      tiersSet.add(tier);
+    });
+    return Array.from(tiersSet).sort((a, b) => a - b);
+  }, [data]);
 
   // Prefetch map page for faster navigation
   React.useEffect(() => {
@@ -176,6 +187,11 @@ export function LinksTable({ data }: LinksTableProps) {
         const b = rowB.original.bandwidth_gbps ?? -1;
         return a - b;
       },
+      filterFn: (row, id, value) => {
+        if (value === "ALL") return true;
+        const tier = getBandwidthTier(row.getValue(id) as number | null);
+        return tier === parseInt(value);
+      },
     },
     {
       accessorKey: "expected_delay_us",
@@ -247,13 +263,14 @@ export function LinksTable({ data }: LinksTableProps) {
 
   const healthStatusFilter = table.getColumn("health_status")?.getFilterValue() as string | undefined;
   const dataStatusFilter = table.getColumn("data_status")?.getFilterValue() as string | undefined;
+  const bandwidthFilter = table.getColumn("bandwidth_gbps")?.getFilterValue() as string | undefined;
 
   const clearAllFilters = () => {
     setColumnFilters([]);
     router.push('/links');
   };
 
-  const hasActiveFilters = healthStatusFilter || dataStatusFilter;
+  const hasActiveFilters = healthStatusFilter || dataStatusFilter || bandwidthFilter;
 
   return (
     <div className="space-y-4">
@@ -278,6 +295,15 @@ export function LinksTable({ data }: LinksTableProps) {
               <X
                 className="h-3 w-3 cursor-pointer hover:text-destructive"
                 onClick={() => table.getColumn("data_status")?.setFilterValue(undefined)}
+              />
+            </Badge>
+          )}
+          {bandwidthFilter && (
+            <Badge variant="secondary" className="gap-1">
+              Bandwidth: {bandwidthFilter} Gbps
+              <X
+                className="h-3 w-3 cursor-pointer hover:text-destructive"
+                onClick={() => table.getColumn("bandwidth_gbps")?.setFilterValue(undefined)}
               />
             </Badge>
           )}
@@ -333,6 +359,25 @@ export function LinksTable({ data }: LinksTableProps) {
             <SelectItem value="MISSING_ISIS">Missing IS-IS</SelectItem>
             <SelectItem value="MISSING_TELEMETRY">Missing Telemetry</SelectItem>
             <SelectItem value="MISSING_BOTH">Missing Both</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select
+          value={bandwidthFilter ?? "ALL"}
+          onValueChange={(value) =>
+            table.getColumn("bandwidth_gbps")?.setFilterValue(value === "ALL" ? undefined : value)
+          }
+        >
+          <SelectTrigger className="w-[200px]">
+            <SelectValue placeholder="Filter by bandwidth" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ALL">All Bandwidth</SelectItem>
+            {uniqueBandwidths.map(bw => (
+              <SelectItem key={bw} value={String(bw)}>
+                {bw} Gbps
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
 

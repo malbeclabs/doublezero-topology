@@ -3,20 +3,20 @@
 /**
  * Map Page
  *
- * Full-screen interactive map view showing network topology.
+ * Full-screen interactive map view showing network topology with comprehensive filtering sidebar.
  */
 
 import { useTopology } from "@/contexts/TopologyContext";
 import { MapboxMap } from "@/components/map/MapboxMap";
-import { MapLegend } from "@/components/map/MapLegend";
-import { DataStatusLegend } from "@/components/map/DataStatusLegend";
+import { MapSidebar } from "@/components/map/MapSidebar";
 import { MapSearch } from "@/components/map/MapSearch";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, useMemo, Suspense } from "react";
-import type { HealthStatus, DataCompleteness } from "@/types/topology";
 import { useTableStore } from "@/lib/stores/table-store";
+import { useMapFilterStore } from "@/lib/stores/map-filter-store";
+import { filterLinks } from "@/lib/map/filter-links";
 
 function MapPageContent() {
   const router = useRouter();
@@ -25,54 +25,20 @@ function MapPageContent() {
   const { setSelectedLink } = useTableStore();
   const [mounted, setMounted] = useState(false);
 
-  // State for filtering links by health status
-  const [visibleStatuses, setVisibleStatuses] = useState<Set<HealthStatus>>(
-    new Set(["HEALTHY", "DRIFT_HIGH", "MISSING_TELEMETRY", "MISSING_ISIS"])
-  );
+  // Get filter state from Zustand store
+  const filters = useMapFilterStore();
 
-  // State for filtering links by data completeness status
-  const [visibleDataStatuses, setVisibleDataStatuses] = useState<Set<DataCompleteness>>(
-    new Set(["COMPLETE", "MISSING_ISIS", "MISSING_TELEMETRY", "MISSING_BOTH"])
-  );
-
-  // Toggle visibility of a health status
-  const handleToggleStatus = (status: HealthStatus) => {
-    setVisibleStatuses((prev) => {
-      const newSet = new Set(prev);
-      if (newSet.has(status)) {
-        newSet.delete(status);
-      } else {
-        newSet.add(status);
-      }
-      return newSet;
+  // Apply filters to links (must be called before conditional returns - Rules of Hooks)
+  const filteredLinks = useMemo(() => {
+    if (!topologyData?.topology) return [];
+    return filterLinks(topologyData.topology, {
+      bandwidthTiers: filters.bandwidthTiers,
+      healthStatuses: filters.healthStatuses,
+      driftRange: filters.driftRange,
+      dataStatuses: filters.dataStatuses,
+      searchQuery: filters.searchQuery,
     });
-  };
-
-  // Toggle visibility of a data status
-  const handleToggleDataStatus = (status: DataCompleteness) => {
-    setVisibleDataStatuses((prev) => {
-      const newSet = new Set(prev);
-      if (newSet.has(status)) {
-        newSet.delete(status);
-      } else {
-        newSet.add(status);
-      }
-      return newSet;
-    });
-  };
-
-  // Calculate data status counts
-  const dataStatusCounts = useMemo(() => {
-    if (!topologyData) return { complete: 0, missing_isis: 0, missing_telemetry: 0, missing_both: 0 };
-
-    return topologyData.topology.reduce((acc, link) => {
-      if (link.data_status === "COMPLETE") acc.complete++;
-      else if (link.data_status === "MISSING_ISIS") acc.missing_isis++;
-      else if (link.data_status === "MISSING_TELEMETRY") acc.missing_telemetry++;
-      else if (link.data_status === "MISSING_BOTH") acc.missing_both++;
-      return acc;
-    }, { complete: 0, missing_isis: 0, missing_telemetry: 0, missing_both: 0 });
-  }, [topologyData]);
+  }, [topologyData?.topology, filters.bandwidthTiers, filters.healthStatuses, filters.driftRange, filters.dataStatuses, filters.searchQuery]);
 
   // Prevent hydration mismatch by only rendering on client
   useEffect(() => {
@@ -138,50 +104,26 @@ function MapPageContent() {
   }
 
   return (
-    <div className="h-[calc(100vh-4rem)] w-full relative">
-      <MapboxMap
-        links={topologyData.topology.filter(link => visibleDataStatuses.has(link.data_status))}
-        locations={topologyData.locations}
-        visibleStatuses={visibleStatuses}
-        key={`map-${visibleDataStatuses.size}-${Array.from(visibleDataStatuses).join(',')}`}
+    <div className="h-[calc(100vh-4rem)] w-full flex overflow-hidden">
+      {/* Sidebar */}
+      <MapSidebar
+        links={topologyData.topology}
+        visibleCount={filteredLinks.length}
       />
 
-      {/* Search bar - Top Left */}
-      <div className="absolute top-4 left-4 w-96 z-10">
-        <div className="bg-background/95 backdrop-blur-sm rounded-lg shadow-lg p-3">
-          <MapSearch
-            links={topologyData.topology}
-            locations={topologyData.locations}
-          />
-        </div>
-      </div>
-
-      {/* Data Status Legend - Bottom Left */}
-      <div className="absolute bottom-4 left-4">
-        <DataStatusLegend
-          dataStatusCounts={dataStatusCounts}
-          totalLinks={topologyData.summary.total_links}
-          visibleStatuses={visibleDataStatuses}
-          onToggleStatus={handleToggleDataStatus}
+      {/* Map Container with Floating Search */}
+      <div className="flex-1 relative">
+        {/* Floating Search Overlay */}
+        <MapSearch
+          links={topologyData.topology}
+          locations={topologyData.locations}
         />
-      </div>
 
-      {/* Navigation buttons - Top Right */}
-      <div className="absolute top-4 right-4 flex gap-2">
-        <Button
-          variant="outline"
-          onClick={() => router.push("/")}
-          className="bg-background/95 backdrop-blur-sm shadow-lg"
-        >
-          Dashboard
-        </Button>
-        <Button
-          variant="outline"
-          onClick={() => router.push("/links")}
-          className="bg-background/95 backdrop-blur-sm shadow-lg"
-        >
-          Data Table
-        </Button>
+        {/* Map */}
+        <MapboxMap
+          links={filteredLinks}
+          locations={topologyData.locations}
+        />
       </div>
     </div>
   );
