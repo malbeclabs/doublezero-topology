@@ -12,6 +12,7 @@ import type { Location } from "@/types/topology";
  * @param snapshotData - Parsed snapshot.json content
  * @returns Array of locations with coordinates and metadata
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function parseLocations(snapshotData: any): Location[] {
   const locationsObj =
     snapshotData?.fetch_data?.dz_serviceability?.locations || {};

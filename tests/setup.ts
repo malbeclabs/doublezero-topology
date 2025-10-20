@@ -7,6 +7,19 @@
 import { beforeAll, afterAll, beforeEach } from "vitest";
 import "@testing-library/jest-dom/vitest";
 
+// Mock ResizeObserver for components that use it (like cmdk)
+global.ResizeObserver = class ResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
+
+// Mock scrollIntoView for elements (used by cmdk)
+// Only set if Element is defined (in DOM tests)
+if (typeof Element !== 'undefined') {
+  Element.prototype.scrollIntoView = () => {};
+}
+
 // Set test environment variables
 beforeAll(() => {
   process.env.S3_REGION = "us-east-1";

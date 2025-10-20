@@ -6,31 +6,10 @@
 
 import { Badge } from "@/components/ui/badge";
 import type { DataCompleteness } from "@/types/topology";
-import { getDataStatusLabel, getDataStatusTailwind } from "@/types/topology";
+import { getDataStatusLabel } from "@/types/topology";
 
 interface DataStatusBadgeProps {
   status: DataCompleteness;
-}
-
-/**
- * Get badge variant based on data completeness status
- *
- * @param status - Data completeness status
- * @returns Badge variant
- */
-function getStatusVariant(status: DataCompleteness): "default" | "destructive" | "outline" | "secondary" {
-  switch (status) {
-    case "COMPLETE":
-      return "default"; // Green
-    case "MISSING_ISIS":
-      return "destructive"; // Red (high alert)
-    case "MISSING_TELEMETRY":
-      return "secondary"; // Yellow/gray
-    case "MISSING_BOTH":
-      return "outline"; // Gray
-    default:
-      return "outline";
-  }
 }
 
 /**

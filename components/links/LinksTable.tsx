@@ -29,7 +29,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { TopologyLink, HealthStatus, DataCompleteness } from "@/types/topology";
+import { TopologyLink } from "@/types/topology";
 import { HealthStatusBadge } from "./HealthStatusBadge";
 import { DataStatusBadge } from "./DataStatusBadge";
 import { useTableStore } from "@/lib/stores/table-store";

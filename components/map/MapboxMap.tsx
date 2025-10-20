@@ -1,17 +1,18 @@
 "use client";
 
 import { useRef, useState, useMemo, useEffect } from "react";
-import Map, { Source, Layer } from "react-map-gl/maplibre";
+import Map, { Source, Layer, Marker } from "react-map-gl/maplibre";
 import type { MapRef, ViewState } from "react-map-gl/maplibre";
 import type { LayerProps } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useTheme } from "next-themes";
 import { X } from "lucide-react";
 
-import type { TopologyLink, Location, HealthStatus, DataCompleteness } from "@/types/topology";
-import { getHealthColor, rgbToHex, getDataStatusColor } from "@/types/topology";
+import type { TopologyLink, Location, HealthStatus } from "@/types/topology";
 import { generateGeodesicArc, shouldUseGeodesicArc } from "@/lib/geodesic";
 import { useTableStore } from "@/lib/stores/table-store";
+import { usePathStore } from "@/lib/stores/path-store";
+import { useMapModeStore } from "@/lib/stores/map-mode-store";
 import { ZoomControls } from "./ZoomControls";
 
 interface MapboxMapProps {
@@ -20,6 +21,8 @@ interface MapboxMapProps {
   visibleStatuses?: Set<HealthStatus>;
   showLinks?: boolean;
   showNodes?: boolean;
+  /** Callback when the current hop index changes (for dynamic highlighting) */
+  onCurrentHopChange?: (hopIndex: number | null) => void;
 }
 
 interface LinkProperties {
@@ -150,6 +153,7 @@ function linksToGeoJSON(
   links: TopologyLink[],
   selectedLinkPk: string | null = null,
   hoveredLinkPk: string | null = null,
+  hasActivePath: boolean = false,
   useGeodesic: boolean = true,
 ): GeoJSON.FeatureCollection {
   const features: GeoJSON.Feature[] = links
@@ -178,6 +182,9 @@ function linksToGeoJSON(
         width = Math.max(width * 1.5, 4);
         opacity = Math.min(opacity + 0.2, 1.0);
       } else if (selectedLinkPk || hoveredLinkPk) {
+        opacity = opacity * 0.3;
+      } else if (hasActivePath) {
+        // Fade background links when path is active
         opacity = opacity * 0.3;
       }
 
@@ -242,15 +249,71 @@ function locationsToGeoJSON(locations: Location[]): GeoJSON.FeatureCollection {
   };
 }
 
+/**
+ * Convert computed path to GeoJSON for rendering
+ */
+function pathToGeoJSON(
+  computedPath: import("@/lib/graph/types").NetworkPath | null,
+  useGeodesic: boolean = true,
+): GeoJSON.FeatureCollection {
+  if (!computedPath) {
+    return {
+      type: "FeatureCollection",
+      features: [],
+    };
+  }
+
+  const features: GeoJSON.Feature[] = [];
+
+  // Create line segments for each hop
+  for (let i = 0; i < computedPath.hops.length - 1; i++) {
+    const sourceHop = computedPath.hops[i];
+    const targetHop = computedPath.hops[i + 1];
+    const link = computedPath.links[i];
+
+    const sourceCoords: [number, number] = [sourceHop.longitude, sourceHop.latitude];
+    const targetCoords: [number, number] = [targetHop.longitude, targetHop.latitude];
+
+    const shouldUseArc = useGeodesic && shouldUseGeodesicArc(sourceCoords, targetCoords);
+    const coordinates = shouldUseArc
+      ? generateGeodesicArc(sourceCoords, targetCoords)
+      : [sourceCoords, targetCoords];
+
+    features.push({
+      type: "Feature",
+      geometry: {
+        type: "LineString",
+        coordinates,
+      },
+      properties: {
+        hop_index: i,
+        source_name: sourceHop.name,
+        target_name: targetHop.name,
+        latency_us: link?.latencyUs || 0,
+        bandwidth_gbps: link?.bandwidthGbps || null,
+        health_status: link?.healthStatus || "UNKNOWN",
+      },
+    });
+  }
+
+  return {
+    type: "FeatureCollection",
+    features,
+  };
+}
+
 export function MapboxMap({
   links,
   locations,
   visibleStatuses,
   showLinks = true,
   showNodes = true,
+  onCurrentHopChange,
 }: MapboxMapProps) {
   const mapRef = useRef<MapRef>(null);
   const lastZoomedLinkPk = useRef<string | null>(null);
+  const lastFittedPathId = useRef<string | null>(null);
+  const hasUserMovedMap = useRef<boolean>(false);
   const [hoveredLink, setHoveredLink] = useState<LinkProperties | null>(null);
   const [hoveredNode, setHoveredNode] = useState<NodeProperties | null>(null);
   const [cursorPosition, setCursorPosition] = useState<{ x: number; y: number } | null>(null);
@@ -258,8 +321,17 @@ export function MapboxMap({
   const [pinnedNode, setPinnedNode] = useState<NodeProperties | null>(null);
   const [mapReady, setMapReady] = useState(false);
 
+  // Animated packet state - position along the path (0 to 1)
+  const [packetProgress, setPacketProgress] = useState(0);
+
   const { resolvedTheme } = useTheme();
   const { selectedLinkPk, hoveredLinkPk, setSelectedLink, setHoveredLink: setHoveredLinkStore } = useTableStore();
+  const { computedPath, hasPath } = usePathStore();
+  const { isPathActiveMode } = useMapModeStore();
+
+  // Extract boolean values for useEffect dependencies
+  const hasComputedPath = hasPath();
+  const isInPathActiveMode = isPathActiveMode();
 
   const mapStyle = resolvedTheme === "dark" ? MAP_STYLE_DARK : MAP_STYLE_LIGHT;
 
@@ -275,12 +347,176 @@ export function MapboxMap({
   }, [links, visibleStatuses]);
 
   const linksGeoJSON = useMemo(() => {
-    return linksToGeoJSON(filteredLinks, selectedLinkPk, hoveredLinkPk);
-  }, [filteredLinks, selectedLinkPk, hoveredLinkPk]);
+    return linksToGeoJSON(filteredLinks, selectedLinkPk, hoveredLinkPk, hasPath());
+  }, [filteredLinks, selectedLinkPk, hoveredLinkPk, hasPath]);
 
   const locationsGeoJSON = useMemo(() => {
     return locationsToGeoJSON(filteredLocations);
   }, [filteredLocations]);
+
+  const pathGeoJSON = useMemo(() => {
+    return pathToGeoJSON(computedPath);
+  }, [computedPath]);
+
+  // Generate arrow markers along the path for directionality
+  const pathArrowsGeoJSON = useMemo(() => {
+    if (!computedPath) {
+      return {
+        type: "FeatureCollection" as const,
+        features: [],
+      };
+    }
+
+    const features = computedPath.links
+      .map((link, index) => {
+        const sourceHop = computedPath.hops[index];
+        const destHop = computedPath.hops[index + 1];
+
+        // Find locations for source and destination
+        const sourceLoc = locations.find(loc => loc.devices.includes(sourceHop.id));
+        const destLoc = locations.find(loc => loc.devices.includes(destHop.id));
+
+        if (!sourceLoc || !destLoc) return null;
+
+        // Calculate midpoint of the link
+        const midLon = (sourceLoc.lon + destLoc.lon) / 2;
+        const midLat = (sourceLoc.lat + destLoc.lat) / 2;
+
+        // Calculate bearing (angle) from source to destination
+        const dLon = destLoc.lon - sourceLoc.lon;
+        const dLat = destLoc.lat - sourceLoc.lat;
+        const bearing = Math.atan2(dLon, dLat) * (180 / Math.PI);
+
+        return {
+          type: "Feature" as const,
+          geometry: {
+            type: "Point" as const,
+            coordinates: [midLon, midLat],
+          },
+          properties: {
+            bearing,
+            linkId: link.id,
+          },
+        };
+      })
+      .filter((f): f is NonNullable<typeof f> => f !== null);
+
+    return {
+      type: "FeatureCollection" as const,
+      features,
+    };
+  }, [computedPath, locations]);
+
+  // Calculate packet position along the path based on progress
+  const packetPosition = useMemo(() => {
+    if (!computedPath) return null;
+
+    // Collect all coordinates from the path
+    const allCoords: [number, number][] = [];
+    for (let i = 0; i < computedPath.hops.length - 1; i++) {
+      const sourceHop = computedPath.hops[i];
+      const targetHop = computedPath.hops[i + 1];
+      const sourceCoords: [number, number] = [sourceHop.longitude, sourceHop.latitude];
+      const targetCoords: [number, number] = [targetHop.longitude, targetHop.latitude];
+
+      // Generate arc or straight line
+      const shouldUseArc = shouldUseGeodesicArc(sourceCoords, targetCoords);
+      const coords = shouldUseArc
+        ? generateGeodesicArc(sourceCoords, targetCoords)
+        : [sourceCoords, targetCoords];
+
+      // Add coords (skip first if not the first segment to avoid duplicates)
+      if (i === 0) {
+        allCoords.push(...coords);
+      } else {
+        allCoords.push(...coords.slice(1));
+      }
+    }
+
+    if (allCoords.length === 0) return null;
+
+    // Calculate index along the path
+    const totalPoints = allCoords.length - 1;
+    const rawIndex = packetProgress * totalPoints;
+    const index = Math.floor(rawIndex);
+    const t = rawIndex - index; // Interpolation factor
+
+    if (index >= totalPoints) {
+      // At the end
+      return {
+        lon: allCoords[totalPoints][0],
+        lat: allCoords[totalPoints][1],
+      };
+    }
+
+    // Interpolate between two points
+    const [lon1, lat1] = allCoords[index];
+    const [lon2, lat2] = allCoords[index + 1];
+
+    return {
+      lon: lon1 + (lon2 - lon1) * t,
+      lat: lat1 + (lat2 - lat1) * t,
+    };
+  }, [computedPath, packetProgress]);
+
+  // Calculate which hop segment the packet is currently traversing
+  // Must match the exact coordinate calculation logic used for packet position
+  const currentHopIndex = useMemo(() => {
+    if (!computedPath || packetProgress === 0) return null;
+
+    // Build the same coordinate array as packet position calculation
+    const allCoords: [number, number][] = [];
+    const segmentBoundaries: number[] = [0]; // Track where each segment starts in the coordinate array
+
+    for (let i = 0; i < computedPath.hops.length - 1; i++) {
+      const sourceHop = computedPath.hops[i];
+      const targetHop = computedPath.hops[i + 1];
+      const sourceCoords: [number, number] = [sourceHop.longitude, sourceHop.latitude];
+      const targetCoords: [number, number] = [targetHop.longitude, targetHop.latitude];
+
+      // Generate arc or straight line (same logic as packet position)
+      const shouldUseArc = shouldUseGeodesicArc(sourceCoords, targetCoords);
+      const coords = shouldUseArc
+        ? generateGeodesicArc(sourceCoords, targetCoords)
+        : [sourceCoords, targetCoords];
+
+      // Add coords (skip first if not the first segment to avoid duplicates)
+      if (i === 0) {
+        allCoords.push(...coords);
+      } else {
+        allCoords.push(...coords.slice(1));
+      }
+
+      // Track where this segment ends (next segment will start here)
+      segmentBoundaries.push(allCoords.length - 1);
+    }
+
+    if (allCoords.length === 0) return null;
+
+    // Calculate current coordinate index (same as packet position)
+    const totalPoints = allCoords.length - 1;
+    const currentIndex = Math.floor(packetProgress * totalPoints);
+
+    // Find which segment this coordinate index belongs to
+    for (let segmentIdx = 0; segmentIdx < segmentBoundaries.length - 1; segmentIdx++) {
+      const segmentStart = segmentBoundaries[segmentIdx];
+      const segmentEnd = segmentBoundaries[segmentIdx + 1];
+
+      if (currentIndex >= segmentStart && currentIndex <= segmentEnd) {
+        return segmentIdx;
+      }
+    }
+
+    // Fallback: last segment
+    return segmentBoundaries.length - 2;
+  }, [computedPath, packetProgress]);
+
+  // Notify parent component when current hop changes (for dynamic highlighting)
+  useEffect(() => {
+    if (onCurrentHopChange) {
+      onCurrentHopChange(currentHopIndex);
+    }
+  }, [currentHopIndex, onCurrentHopChange]);
 
   useEffect(() => {
     if (!selectedLinkPk) {
@@ -403,6 +639,127 @@ export function MapboxMap({
     }
   }, [selectedLinkPk, links, mapReady]);
 
+  // Auto-fit map to computed path
+  useEffect(() => {
+    if (!computedPath || !mapRef.current || !mapReady || !isPathActiveMode()) {
+      // Reset tracking when no path is active
+      if (!computedPath) {
+        lastFittedPathId.current = null;
+        hasUserMovedMap.current = false;
+      }
+      return;
+    }
+
+    // Create a unique ID for this path based on source, destination, and strategy
+    const pathId = `${computedPath.source.id}-${computedPath.destination.id}`;
+
+    // Skip if we've already fitted to this path AND user has moved the map
+    if (lastFittedPathId.current === pathId && hasUserMovedMap.current) {
+      return;
+    }
+
+    const map = mapRef.current.getMap();
+    if (!map) return;
+
+    // Wait for map to be fully loaded before fitting
+    const performFit = () => {
+      // Get all coordinates from path hops
+      const allCoordinates = locations
+        .filter(loc => computedPath.hops.some(hop => hop.id === loc.devices[0]))
+        .map(loc => [loc.lon, loc.lat]);
+
+      if (allCoordinates.length === 0) return;
+
+      // Calculate bounds from all coordinates
+      const lons = allCoordinates.map(coord => coord[0]);
+      const lats = allCoordinates.map(coord => coord[1]);
+
+      const minLon = Math.min(...lons);
+      const maxLon = Math.max(...lons);
+      const minLat = Math.min(...lats);
+      const maxLat = Math.max(...lats);
+
+      const lonDiff = maxLon - minLon;
+      const latDiff = maxLat - minLat;
+
+      // Add padding (10% of distance or minimum for short paths)
+      const lonPadding = lonDiff < 0.01 ? 0.05 : lonDiff * 0.1;
+      const latPadding = latDiff < 0.01 ? 0.05 : latDiff * 0.1;
+
+      mapRef.current?.fitBounds(
+        [
+          [minLon - lonPadding, minLat - latPadding],
+          [maxLon + lonPadding, maxLat + latPadding],
+        ],
+        {
+          padding: 100,
+          duration: 1000,
+          maxZoom: 8,
+        }
+      );
+
+      // Mark this path as fitted and reset user movement tracking
+      lastFittedPathId.current = pathId;
+      hasUserMovedMap.current = false;
+    };
+
+    // If map is already loaded, fit immediately
+    const isLoaded = map.isStyleLoaded() && map.loaded();
+
+    if (isLoaded) {
+      performFit();
+    } else {
+      // Wait for map to load
+      let hasFitted = false;
+
+      const fitOnce = () => {
+        if (!hasFitted) {
+          hasFitted = true;
+          performFit();
+        }
+      };
+
+      map.once('load', fitOnce);
+
+      setTimeout(() => {
+        if (!hasFitted && map.isStyleLoaded()) {
+          fitOnce();
+        }
+      }, 500);
+    }
+  }, [computedPath, mapReady, isPathActiveMode, locations]);
+
+  // Animate packet flowing along the path
+  useEffect(() => {
+    if (!hasComputedPath || !isInPathActiveMode) {
+      setPacketProgress(0);
+      return;
+    }
+
+    let animationFrameId: number;
+    let startTime: number | null = null;
+    const duration = 5000; // 5 seconds for full path traversal
+
+    const animate = (timestamp: number) => {
+      if (!startTime) startTime = timestamp;
+      const elapsed = timestamp - startTime;
+
+      // Calculate progress (0 to 1) and loop
+      const progress = (elapsed % duration) / duration;
+      setPacketProgress(progress);
+
+      animationFrameId = requestAnimationFrame(animate);
+    };
+
+    animationFrameId = requestAnimationFrame(animate);
+
+    return () => {
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+      }
+    };
+  }, [hasComputedPath, isInPathActiveMode]);
+
   const lineLayer: LayerProps = {
     id: "network-links",
     type: "line",
@@ -460,6 +817,11 @@ export function MapboxMap({
       const feature = features[0];
 
       if (feature.layer.id === "network-links") {
+        // In path-active mode, don't allow link clicking
+        if (isPathActiveMode()) {
+          return;
+        }
+
         const linkProps = feature.properties as LinkProperties;
         const linkPk = linkProps.link_pk;
 
@@ -472,6 +834,7 @@ export function MapboxMap({
           setPinnedNode(null);
         }
       } else if (feature.layer.id === "network-nodes") {
+        // Show node details
         const nodeProps = feature.properties as NodeProperties;
         setPinnedNode(nodeProps);
         setPinnedLink(null);
@@ -531,6 +894,12 @@ export function MapboxMap({
         attributionControl={false}
         onClick={handleMapClick}
         onMouseMove={handleMouseMove}
+        onMove={() => {
+          // Track user interaction (pan/zoom) to determine re-fit behavior
+          if (computedPath) {
+            hasUserMovedMap.current = true;
+          }
+        }}
         onLoad={() => setMapReady(true)}
         interactiveLayerIds={["network-links", "network-nodes"]}
       >
@@ -541,6 +910,110 @@ export function MapboxMap({
         <Source id="locations" type="geojson" data={locationsGeoJSON}>
           <Layer {...circleLayer} />
         </Source>
+
+        {/* Computed Path Layer */}
+        {hasPath() && computedPath && (
+          <>
+            <Source id="computed-path" type="geojson" data={pathGeoJSON}>
+              {/* Outer glow layer - subtle halo effect */}
+              <Layer
+                id="computed-path-glow"
+                type="line"
+                paint={{
+                  "line-color": "#3b82f6", // Blue
+                  "line-width": isPathActiveMode() ? 10 : 8,
+                  "line-opacity": isPathActiveMode() ? 0.25 : 0.2,
+                  "line-blur": 4,
+                }}
+                layout={{
+                  "line-join": "round",
+                  "line-cap": "round",
+                }}
+              />
+
+              {/* Main path layer - solid blue line */}
+              <Layer
+                id="computed-path-layer"
+                type="line"
+                paint={{
+                  "line-color": "#3b82f6", // Blue
+                  "line-width": isPathActiveMode() ? 5 : 4,
+                  "line-opacity": isPathActiveMode() ? 0.85 : 0.75,
+                  "line-blur": 0.5, // Subtle blur for softer appearance
+                }}
+                layout={{
+                  "line-join": "round",
+                  "line-cap": "round",
+                }}
+              />
+            </Source>
+
+            {/* Arrow markers for directionality */}
+            <Source id="path-arrows" type="geojson" data={pathArrowsGeoJSON}>
+              <Layer
+                id="path-arrows-layer"
+                type="symbol"
+                layout={{
+                  "icon-image": "", // No icon, use text instead
+                  "text-field": "▶", // Unicode right-pointing triangle
+                  "text-size": 12,
+                  "text-rotate": ["get", "bearing"],
+                  "text-rotation-alignment": "map",
+                  "text-keep-upright": false,
+                  "text-allow-overlap": true,
+                  "text-ignore-placement": true,
+                }}
+                paint={{
+                  "text-color": "#ffffff", // White arrows
+                  "text-halo-color": "#3b82f6", // Blue halo matching path
+                  "text-halo-width": 1.5,
+                  "text-opacity": isPathActiveMode() ? 0.75 : 0.65,
+                }}
+              />
+            </Source>
+
+            {/* Source Marker (Green) */}
+            <Marker
+              longitude={computedPath.source.longitude}
+              latitude={computedPath.source.latitude}
+              anchor="center"
+            >
+              <div
+                className="w-3 h-3 rounded-full border-2 border-white shadow-lg"
+                style={{ backgroundColor: "#22c55e" }}
+                title={`Source: ${computedPath.source.name}`}
+              />
+            </Marker>
+
+            {/* Destination Marker (Red) */}
+            <Marker
+              longitude={computedPath.destination.longitude}
+              latitude={computedPath.destination.latitude}
+              anchor="center"
+            >
+              <div
+                className="w-3 h-3 rounded-full border-2 border-white shadow-lg"
+                style={{ backgroundColor: "#ef4444" }}
+                title={`Destination: ${computedPath.destination.name}`}
+              />
+            </Marker>
+
+            {/* Animated Packet Marker */}
+            {packetPosition && (
+              <Marker
+                longitude={packetPosition.lon}
+                latitude={packetPosition.lat}
+                anchor="center"
+              >
+                <div
+                  className="w-2.5 h-2.5 rounded-full border-2 border-white shadow-lg animate-pulse"
+                  style={{ backgroundColor: "#fbbf24" }}
+                  title="Packet flow"
+                />
+              </Marker>
+            )}
+          </>
+        )}
       </Map>
       {cursorPosition && (hoveredLink || hoveredNode) && !pinnedLink && !pinnedNode && (
         <div

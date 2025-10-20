@@ -15,7 +15,7 @@ interface MapSearchProps {
 export function MapSearch({ links, locations }: MapSearchProps) {
   const [open, setOpen] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(-1);
-  const { selectedLinkPk, setSelectedLink } = useTableStore();
+  const { setSelectedLink } = useTableStore();
   const { searchQuery, setSearchQuery } = useMapFilterStore();
   const containerRef = useRef<HTMLDivElement>(null);
 

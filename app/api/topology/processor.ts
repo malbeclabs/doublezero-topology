@@ -70,13 +70,15 @@ function parseSlash31Network(tunnelNet: string | null): string[] {
 /**
  * Build ISIS IP index from ISIS database
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildIsisIpIndex(isisData: any): Map<string, Array<{ metric: number }>> {
   const index = new Map<string, Array<{ metric: number }>>();
 
   try {
     const lsps = isisData?.vrfs?.default?.isisInstances?.['1']?.level?.['2']?.lsps || {};
 
-    for (const [lspId, lspData] of Object.entries(lsps)) {
+    for (const [, lspData] of Object.entries(lsps)) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const lsp = lspData as any;
       const neighbors = lsp.neighbors || [];
 
@@ -107,7 +109,7 @@ function buildIsisIpIndex(isisData: any): Map<string, Array<{ metric: number }>>
 /**
  * Calculate location offsets for devices at the same location
  */
-function calculateLocationOffsets(locationsObj: any): Map<string, { offsetLat: number; offsetLon: number }> {
+function calculateLocationOffsets(): Map<string, { offsetLat: number; offsetLon: number }> {
   const offsets = new Map<string, { offsetLat: number; offsetLon: number }>();
 
   // For now, just return empty map - no offsets needed
@@ -120,13 +122,15 @@ function calculateLocationOffsets(locationsObj: any): Map<string, { offsetLat: n
 /**
  * Build device location map
  */
-function buildDeviceLocationMap(snapshotData: any, locationOffsets: Map<string, any>): Map<string, any> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildDeviceLocationMap(snapshotData: any): Map<string, any> {
   const map = new Map();
 
   const devices = snapshotData?.fetch_data?.dz_serviceability?.devices || {};
   const locations = snapshotData?.fetch_data?.dz_serviceability?.locations || {};
 
-  for (const [devicePk, deviceData] of Object.entries(devices)) {
+  for (const [, deviceData] of Object.entries(devices)) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const device = deviceData as any;
     const locationPk = device.location_pk;
     const location = locations[locationPk];
@@ -149,6 +153,7 @@ function buildDeviceLocationMap(snapshotData: any, locationOffsets: Map<string, 
 /**
  * Calculate device coordinates with offsets
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function calculateDeviceCoordinates(deviceLocationMap: Map<string, any>): Map<string, any> {
   return deviceLocationMap;
 }
@@ -160,15 +165,16 @@ function calculateDeviceCoordinates(deviceLocationMap: Map<string, any>): Map<st
  * @param isisData - Parsed ISIS JSON
  * @returns Processed topology result
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function processTopologyData(snapshotData: any, isisData: any) {
   // Extract links (object with link_pk as keys)
   const linksObj = snapshotData?.fetch_data?.dz_serviceability?.links || {};
   const locationsObj = snapshotData?.fetch_data?.dz_serviceability?.locations || {};
 
   // Build indexes
-  const locationOffsets = calculateLocationOffsets(locationsObj);
+  const locationOffsets = calculateLocationOffsets();
   const isisIpIndex = buildIsisIpIndex(isisData);
-  const deviceLocationMap = buildDeviceLocationMap(snapshotData, locationOffsets);
+  const deviceLocationMap = buildDeviceLocationMap(snapshotData);
   const deviceCoords = calculateDeviceCoordinates(deviceLocationMap);
 
   // Extract telemetry samples

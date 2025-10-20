@@ -35,11 +35,6 @@ export function ActiveFiltersSection() {
     return status.replace(/_/g, " ");
   };
 
-  // Format data status for display
-  const formatDataStatus = (status: string) => {
-    return status.replace(/_/g, " ");
-  };
-
   return (
     <div className="sticky top-0 z-10 bg-background border-b border-border p-3 space-y-2">
       <div className="flex items-center justify-between">

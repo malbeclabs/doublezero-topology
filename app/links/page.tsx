@@ -13,7 +13,6 @@ import { useTopology } from "@/contexts/TopologyContext";
 import { LinksTable } from "@/components/links/LinksTable";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import type { TopologyLink } from "@/types/topology";
 
 export default function LinksPage() {
   const router = useRouter();

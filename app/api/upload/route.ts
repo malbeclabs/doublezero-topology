@@ -61,7 +61,9 @@ export async function POST(request: NextRequest) {
     const isisContent = await isisFile.text();
 
     // Validate JSON
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let snapshotData: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let isisData: any;
 
     try {

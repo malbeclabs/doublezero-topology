@@ -97,6 +97,7 @@ export async function downloadFileAsString(key: string): Promise<string> {
  * @param key - Object key (path) in the bucket
  * @returns Parsed JSON object
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function downloadJsonFile<T = any>(key: string): Promise<T> {
   const content = await downloadFileAsString(key);
   return JSON.parse(content);

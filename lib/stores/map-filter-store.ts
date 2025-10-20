@@ -36,7 +36,6 @@ interface MapFilterState {
 }
 
 // Default filter states (INVERTED LOGIC: empty = show all, populated = show only selected)
-const DEFAULT_BANDWIDTH_TIER: number | null = null; // null = show all
 const DEFAULT_HEALTH_STATUSES = new Set<HealthStatus>(); // empty = show all
 const DEFAULT_DATA_STATUSES = new Set<DataCompleteness>(); // empty = show all
 const DEFAULT_DRIFT_RANGE: DriftRange = { min: 0, max: 100 };

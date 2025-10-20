@@ -70,6 +70,7 @@ export function calculateForceLayout(
     .force(
       "link",
       forceLink(graphLinks)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .id((d: any) => d.id)
         .distance(100) // Distance between connected nodes
         .strength(0.5)
@@ -82,6 +83,7 @@ export function calculateForceLayout(
     .force(
       "collide",
       forceCollide()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .radius((d: any) => Math.max(d.location.device_count * 5, 20))
         .strength(0.9)
     )

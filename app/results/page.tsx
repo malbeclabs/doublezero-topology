@@ -89,13 +89,7 @@ export default function ResultsPage() {
     return null; // Will redirect via useEffect
   }
 
-  const { summary, metadata } = topologyData;
-
-  const formatDate = (isoString: string): string => {
-    const date = new Date(isoString);
-    // Use consistent formatting to avoid hydration mismatches
-    return date.toISOString().replace("T", " ").substring(0, 19) + " UTC";
-  };
+  const { summary } = topologyData;
 
   const healthPercentage = (count: number): string => {
     if (summary.total_links === 0) return "0.0";
