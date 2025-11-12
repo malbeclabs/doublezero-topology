@@ -40,13 +40,22 @@ export function buildTopologyGraph(
     adjacencyList: new Map(),
   };
 
+  const active_links = [...links];
+  for(let i = active_links.length - 1; i >= 0; i--)
+  {
+    if(!active_links[i].has_isis)
+    {
+      active_links.splice(i, 1);
+    }
+  }
+
   // Early return for empty links
-  if (links.length === 0) {
+  if (active_links.length === 0) {
     return graph;
   }
 
   // Build nodes and edges
-  for (const link of links) {
+  for (const link of active_links) {
     // Create/update node for device A
     const nodeAId = link.device_a_code;
     if (!graph.nodes.has(nodeAId)) {
