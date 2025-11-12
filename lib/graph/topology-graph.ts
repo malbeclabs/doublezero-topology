@@ -43,7 +43,7 @@ export function buildTopologyGraph(
   const active_links = [...links];
   for(let i = active_links.length - 1; i >= 0; i--)
   {
-    if(!active_links[i].has_isis)
+    if( (!active_links[i].has_isis) || (active_links[i].measured_p95_us == 0) || active_links[i].expected_delay_us >= 1000000)
     {
       active_links.splice(i, 1);
     }
