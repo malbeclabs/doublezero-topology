@@ -1,5 +1,7 @@
 # DoubleZero Topology
 
+[![CI](https://github.com/malbeclabs/doublezero-topology/actions/workflows/ci.yml/badge.svg)](https://github.com/malbeclabs/doublezero-topology/actions/workflows/ci.yml)
+
 ## Using Docker (Recommended)
 
 ```bash

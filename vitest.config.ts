@@ -17,6 +17,18 @@ export default defineConfig({
       S3_ENDPOINT: "http://localhost:9000",
       NODE_ENV: "test",
     },
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "json", "html"],
+      exclude: [
+        "node_modules/",
+        "tests/",
+        "**/*.config.*",
+        "**/*.test.*",
+        "**/types.ts",
+        ".next/",
+      ],
+    },
   },
   resolve: {
     alias: {
