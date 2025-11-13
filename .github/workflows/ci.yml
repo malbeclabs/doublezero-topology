@@ -148,6 +148,7 @@ jobs:
         with:
           context: .
           push: false
+          load: true
           tags: dztopo:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
