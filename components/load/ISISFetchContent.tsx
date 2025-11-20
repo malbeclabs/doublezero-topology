@@ -1,9 +1,10 @@
 "use client";
 
 /**
- * ISIS Fetch Content Component
+ * ISIS Fetch Content Component (v2 - Client-Side)
  *
- * Content portion of S3 ISIS fetch (extracted for reuse in unified card).
+ * Fetches ISIS database directly from S3 using client-side detection.
+ * No server-side API required - uses direct HTTPS fetch.
  */
 
 import { useState } from "react";
@@ -13,6 +14,8 @@ import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Cloud, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { useTopology } from "@/contexts/TopologyContext";
+import { detectLatestIsis, detectLatestIsisForDate } from "@/lib/s3/isis-detector";
+import { fetchFileFromUrl } from "@/lib/s3/public-bucket";
 import type { IsisData } from "@/lib/storage/snapshot-cache";
 
 type FetchState = "idle" | "fetching" | "success" | "error";
@@ -26,40 +29,39 @@ export function ISISFetchContent({ onSuccess }: ISISFetchContentProps = {}) {
   const [fetchState, setFetchState] = useState<FetchState>("idle");
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [specificDate, setSpecificDate] = useState<string>("");
+  const [fetchedTimestamp, setFetchedTimestamp] = useState<string>("");
 
   const handleFetchLatest = async () => {
     setFetchState("fetching");
     setErrorMessage("");
+    setFetchedTimestamp("");
 
     try {
-      const response = await fetch("/api/s3/fetch-isis", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({}),
-      });
+      // Detect latest ISIS file
+      const latest = await detectLatestIsis();
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to fetch ISIS file");
+      if (!latest) {
+        throw new Error("No ISIS files found in the last 30 days");
       }
 
-      const result = await response.json();
+      // Fetch the file
+      const result = await fetchFileFromUrl(latest.url);
 
       if (!result.success) {
         throw new Error(result.error || "Failed to fetch ISIS file");
       }
 
+      // Store in context
       const isis: IsisData = {
-        data: result.data.isis,
+        data: result.data,
         source: "s3",
-        filename: result.data.filename,
-        timestamp: Date.now(),
-        size: result.data.size,
+        filename: latest.url.split("/").pop() || "isis-db.json",
+        timestamp: latest.timestamp.getTime(),
+        size: result.size || 0,
       };
 
       await setIsisData(isis);
+      setFetchedTimestamp(latest.timestamp.toISOString());
       setFetchState("success");
       onSuccess?.();
     } catch (error) {
@@ -70,46 +72,43 @@ export function ISISFetchContent({ onSuccess }: ISISFetchContentProps = {}) {
     }
   };
 
-  const handleFetchSpecific = async () => {
-    const datePattern = /^\d{4}\.\d{2}\.\d{2}$/;
-    if (!datePattern.test(specificDate)) {
-      setErrorMessage("Please enter a valid date in YYYY.MM.DD format (e.g., 2025.10.30)");
+  const handleFetchByDate = async () => {
+    if (!specificDate) {
+      setErrorMessage("Please select a date");
       setFetchState("error");
       return;
     }
 
     setFetchState("fetching");
     setErrorMessage("");
+    setFetchedTimestamp("");
 
     try {
-      const response = await fetch("/api/s3/fetch-isis", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ date: specificDate }),
-      });
+      // Detect latest ISIS file for the specified date
+      const latest = await detectLatestIsisForDate(specificDate);
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to fetch ISIS file");
+      if (!latest) {
+        throw new Error(`No ISIS files found for ${specificDate}`);
       }
 
-      const result = await response.json();
+      // Fetch the file
+      const result = await fetchFileFromUrl(latest.url);
 
       if (!result.success) {
         throw new Error(result.error || "Failed to fetch ISIS file");
       }
 
+      // Store in context
       const isis: IsisData = {
-        data: result.data.isis,
+        data: result.data,
         source: "s3",
-        filename: result.data.filename,
-        timestamp: Date.now(),
-        size: result.data.size,
+        filename: latest.url.split("/").pop() || "isis-db.json",
+        timestamp: latest.timestamp.getTime(),
+        size: result.size || 0,
       };
 
       await setIsisData(isis);
+      setFetchedTimestamp(latest.timestamp.toISOString());
       setFetchState("success");
       onSuccess?.();
     } catch (error) {
@@ -124,6 +123,7 @@ export function ISISFetchContent({ onSuccess }: ISISFetchContentProps = {}) {
     setFetchState("idle");
     setErrorMessage("");
     setSpecificDate("");
+    setFetchedTimestamp("");
   };
 
   const isDisabled = fetchState === "fetching" || fetchState === "success";
@@ -162,7 +162,7 @@ export function ISISFetchContent({ onSuccess }: ISISFetchContentProps = {}) {
           )}
         </Button>
         <p className="text-xs text-muted-foreground text-center">
-          Automatically downloads the latest IS-IS database from S3
+          Automatically downloads the latest IS-IS database (checks last 30 days)
         </p>
       </div>
 
@@ -176,21 +176,20 @@ export function ISISFetchContent({ onSuccess }: ISISFetchContentProps = {}) {
         </div>
       </div>
 
-      {/* Specific Date Input */}
+      {/* Fetch by Date */}
       <div className="space-y-2">
-        <Label htmlFor="specific-date-unified">Specific Date</Label>
+        <Label htmlFor="specific-date">Fetch by Date</Label>
         <div className="flex gap-2">
           <Input
-            id="specific-date-unified"
-            type="text"
-            placeholder="YYYY.MM.DD"
+            id="specific-date"
+            type="date"
             value={specificDate}
             onChange={(e) => setSpecificDate(e.target.value)}
             disabled={isDisabled}
             className="flex-1"
           />
           <Button
-            onClick={handleFetchSpecific}
+            onClick={handleFetchByDate}
             disabled={isDisabled || !specificDate}
             variant="outline"
           >
@@ -198,16 +197,19 @@ export function ISISFetchContent({ onSuccess }: ISISFetchContentProps = {}) {
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
-          Enter a date in YYYY.MM.DD format (e.g., 2025.10.30)
+          Gets the latest upload from the selected date (03:42, 09:42, 15:42, or 21:42 UTC)
         </p>
       </div>
 
       {/* Success Message */}
-      {fetchState === "success" && (
+      {fetchState === "success" && fetchedTimestamp && (
         <Alert className="border-green-500 bg-green-50 dark:bg-green-950">
           <CheckCircle2 className="h-4 w-4 text-green-600" />
           <AlertDescription className="text-green-800 dark:text-green-400">
             IS-IS database fetched successfully!
+            <span className="block text-xs mt-1 font-mono">
+              Timestamp: {new Date(fetchedTimestamp).toLocaleString()} UTC
+            </span>
           </AlertDescription>
         </Alert>
       )}

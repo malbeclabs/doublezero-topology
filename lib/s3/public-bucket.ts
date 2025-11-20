@@ -99,11 +99,10 @@ export async function checkEpochExists(
   fileType: FileType = "snapshot"
 ): Promise<boolean> {
   const url = buildS3Url(epoch, fileType);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout for HEAD
 
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout for HEAD
-
     const response = await fetch(url, {
       method: "HEAD",
       signal: controller.signal,
@@ -111,7 +110,8 @@ export async function checkEpochExists(
 
     clearTimeout(timeoutId);
     return response.ok;
-  } catch (error) {
+  } catch {
+    clearTimeout(timeoutId);
     return false;
   }
 }
@@ -283,6 +283,77 @@ export async function fetchFileFromS3(
     return {
       success: false,
       epoch,
+      data: null,
+      error: errorType,
+      source: "s3",
+      timestamp: Date.now(),
+    };
+  }
+}
+
+/**
+ * Fetch file from S3 using direct URL
+ *
+ * This is useful for ISIS database files where the URL is determined
+ * by timestamp detection rather than epoch number.
+ *
+ * @param url - Full HTTPS URL to the S3 file
+ * @param onProgress - Optional callback for progress updates
+ * @param signal - Optional AbortSignal for cancellation
+ * @returns Fetch result with data and metadata
+ */
+export async function fetchFileFromUrl(
+  url: string,
+  onProgress?: (progress: DownloadProgress) => void,
+  signal?: AbortSignal
+): Promise<EpochFetchResult> {
+  try {
+    // Download file with progress tracking
+    const arrayBuffer = await downloadWithProgress(url, onProgress, signal);
+
+    // Convert to string and parse JSON
+    const decoder = new TextDecoder("utf-8");
+    const jsonString = decoder.decode(arrayBuffer);
+
+    let parsedData;
+    try {
+      parsedData = JSON.parse(jsonString);
+    } catch {
+      return {
+        success: false,
+        epoch: null,
+        data: null,
+        error: "INVALID_JSON",
+        source: "s3",
+        timestamp: Date.now(),
+      };
+    }
+
+    return {
+      success: true,
+      epoch: null,
+      data: parsedData,
+      source: "s3",
+      timestamp: Date.now(),
+      size: arrayBuffer.byteLength,
+    };
+  } catch (error) {
+    let errorType = "UNKNOWN";
+    if (error instanceof Error) {
+      if (error.message === "NOT_FOUND") {
+        errorType = "NOT_FOUND";
+      } else if (error.message === "TIMEOUT") {
+        errorType = "TIMEOUT";
+      } else if (error.message === "CORS_ERROR") {
+        errorType = "CORS_ERROR";
+      } else if (error.message === "NETWORK_ERROR") {
+        errorType = "NETWORK_ERROR";
+      }
+    }
+
+    return {
+      success: false,
+      epoch: null,
       data: null,
       error: errorType,
       source: "s3",
