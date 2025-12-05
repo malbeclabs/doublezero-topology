@@ -1,158 +1,156 @@
 /**
  * Epoch Detection Algorithm
  *
- * Automatically detects the latest available epoch in the S3 bucket.
- * Does NOT assume sequential numbering (e.g., epoch 33 may not exist).
+ * Automatically detects the latest available snapshot epoch in the S3 bucket.
+ * Uses S3 ListBucket API to find all available epochs.
  *
- * Strategy: Try epochs from high to low using HEAD requests
- * to avoid downloading full files.
+ * File naming: mn-epoch-{N}-snapshot.json
  */
 
-import { checkEpochExists, type FileType } from "./public-bucket";
-
 /**
- * Default starting epoch for detection
- * (assumes epochs won't exceed 100 in near future)
+ * S3 bucket URL for snapshots
  */
-const DEFAULT_START_EPOCH = 100;
+const S3_BUCKET_URL =
+  process.env.NEXT_PUBLIC_S3_BUCKET_URL ||
+  "https://doublezero-contributor-rewards-mn-beta-snapshots.s3.amazonaws.com";
 
 /**
- * Minimum known epoch (earliest available)
+ * Parse epoch number from snapshot filename
+ *
+ * @param filename - Filename like "mn-epoch-63-snapshot.json"
+ * @returns Epoch number, or null if invalid format
  */
-const MIN_EPOCH = 32;
+export function parseEpochFromFilename(filename: string): number | null {
+  const match = filename.match(/^mn-epoch-(\d+)-snapshot\.json$/);
+
+  if (!match) return null;
+
+  return parseInt(match[1], 10);
+}
 
 /**
- * Detect the latest available epoch in the S3 bucket
+ * List all available snapshot epochs from S3 bucket
  *
- * Uses binary search-like approach with fallback to linear search:
- * 1. Check if start epoch exists
- * 2. If yes, try higher (doubling)
- * 3. If no, search downward linearly
+ * Uses S3 ListBucket API (list-type=2) to get all files.
  *
- * @param startEpoch - Starting epoch to check (default: 100)
- * @param fileType - Type of file to check for
+ * @returns Array of epoch numbers sorted descending (latest first)
+ */
+export async function listAvailableEpochs(): Promise<number[]> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+  try {
+    const response = await fetch(`${S3_BUCKET_URL}/?list-type=2`, {
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(`Failed to list epochs: ${response.status}`);
+    }
+
+    const xml = await response.text();
+
+    // Parse XML to extract <Key> elements
+    const keyMatches = xml.matchAll(/<Key>([^<]+)<\/Key>/g);
+    const epochs: number[] = [];
+
+    for (const match of keyMatches) {
+      const filename = match[1];
+      const epoch = parseEpochFromFilename(filename);
+      if (epoch !== null) {
+        epochs.push(epoch);
+      }
+    }
+
+    // Sort descending (latest first)
+    epochs.sort((a, b) => b - a);
+
+    return epochs;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("Timeout listing epochs");
+    }
+    throw error;
+  }
+}
+
+/**
+ * Detect the latest available snapshot epoch in the S3 bucket
+ *
+ * Uses S3 ListBucket API to find all epochs, then returns the highest.
+ *
  * @returns Latest available epoch number, or null if none found
  */
-export async function detectLatestEpoch(
-  startEpoch: number = DEFAULT_START_EPOCH,
-  fileType: FileType = "snapshot"
-): Promise<number | null> {
-  // First, do a quick check if the start epoch exists
-  const startExists = await checkEpochExists(startEpoch, fileType);
+export async function detectLatestEpoch(): Promise<number | null> {
+  const epochs = await listAvailableEpochs();
 
-  if (startExists) {
-    // If start epoch exists, try to find a higher one
-    let searchEpoch = startEpoch * 2;
-    while (searchEpoch <= 999) {
-      const exists = await checkEpochExists(searchEpoch, fileType);
-      if (exists) {
-        startEpoch = searchEpoch;
-        searchEpoch *= 2;
-      } else {
-        break;
-      }
-    }
-
-    // Now do linear search downward from startEpoch to find exact latest
-    for (let epoch = startEpoch; epoch <= 999; epoch++) {
-      const nextExists = await checkEpochExists(epoch + 1, fileType);
-      if (!nextExists) {
-        return epoch; // Found the latest
-      }
-    }
-
-    return startEpoch;
+  if (epochs.length === 0) {
+    return null;
   }
 
-  // Start epoch doesn't exist, search downward linearly
-  for (let epoch = startEpoch - 1; epoch >= MIN_EPOCH; epoch--) {
-    const exists = await checkEpochExists(epoch, fileType);
-    if (exists) {
-      return epoch;
-    }
-  }
-
-  // No epochs found
-  return null;
+  return epochs[0]; // Already sorted descending
 }
 
 /**
  * Detect latest epoch with progress callback
  *
- * Useful for showing progress in UI during detection
+ * Note: With ListBucket API, progress is instant (single request).
+ * The callback is called once with 100% progress.
  *
- * @param startEpoch - Starting epoch to check
- * @param fileType - Type of file to check for
- * @param onProgress - Callback for progress updates (current epoch being checked)
+ * @param onProgress - Callback for progress updates
  * @returns Latest available epoch number, or null if none found
  */
 export async function detectLatestEpochWithProgress(
-  startEpoch: number = DEFAULT_START_EPOCH,
-  fileType: FileType = "snapshot",
   onProgress?: (currentEpoch: number, maxEpoch: number) => void
 ): Promise<number | null> {
-  const maxSearchEpoch = startEpoch;
+  const epochs = await listAvailableEpochs();
 
-  for (let epoch = maxSearchEpoch; epoch >= MIN_EPOCH; epoch--) {
-    if (onProgress) {
-      onProgress(epoch, maxSearchEpoch);
-    }
-
-    const exists = await checkEpochExists(epoch, fileType);
-    if (exists) {
-      return epoch;
-    }
+  if (epochs.length === 0) {
+    return null;
   }
 
-  return null;
+  const latest = epochs[0];
+
+  // Call progress callback with final result
+  if (onProgress) {
+    onProgress(latest, latest);
+  }
+
+  return latest;
 }
 
 /**
- * Check if a specific epoch exists (wrapper for better API)
+ * Check if a specific snapshot epoch exists
  *
  * @param epoch - Epoch number to check
- * @param fileType - Type of file to check for
  * @returns true if epoch exists, false otherwise
  */
-export async function isEpochAvailable(
-  epoch: number,
-  fileType: FileType = "snapshot"
-): Promise<boolean> {
-  return await checkEpochExists(epoch, fileType);
+export async function isEpochAvailable(epoch: number): Promise<boolean> {
+  const epochs = await listAvailableEpochs();
+  return epochs.includes(epoch);
 }
 
 /**
  * Get a list of available epochs in a given range
  *
- * Note: This can be slow for large ranges. Use sparingly.
- *
  * @param startEpoch - Start of range (inclusive)
  * @param endEpoch - End of range (inclusive)
- * @param fileType - Type of file to check for
- * @returns Array of available epoch numbers
+ * @returns Array of available epoch numbers (sorted ascending)
  */
 export async function getAvailableEpochs(
   startEpoch: number,
-  endEpoch: number,
-  fileType: FileType = "snapshot"
+  endEpoch: number
 ): Promise<number[]> {
-  const available: number[] = [];
-
-  // Limit range to prevent too many requests
-  const range = Math.abs(endEpoch - startEpoch);
-  if (range > 50) {
-    throw new Error("Range too large. Maximum 50 epochs per query.");
-  }
+  const allEpochs = await listAvailableEpochs();
 
   const start = Math.min(startEpoch, endEpoch);
   const end = Math.max(startEpoch, endEpoch);
 
-  for (let epoch = start; epoch <= end; epoch++) {
-    const exists = await checkEpochExists(epoch, fileType);
-    if (exists) {
-      available.push(epoch);
-    }
-  }
-
-  return available;
+  // Filter to range and sort ascending
+  return allEpochs
+    .filter((epoch) => epoch >= start && epoch <= end)
+    .sort((a, b) => a - b);
 }

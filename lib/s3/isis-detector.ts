@@ -2,7 +2,7 @@
  * ISIS Database S3 Detector
  *
  * Detects and fetches ISIS database files from public S3 bucket.
- * No AWS SDK or credentials required - uses direct HTTPS fetch.
+ * Uses S3 ListBucket API to find files, no AWS SDK required.
  *
  * File Format: YYYY-MM-DDTHH-MM-SSZ_upload_data.json
  * Example: 2025-11-20T15-42-04Z_upload_data.json
@@ -11,15 +11,11 @@
  */
 
 /**
- * Known upload times for ISIS database (UTC)
- * Files are uploaded every 6 hours at these minute marks
+ * S3 bucket URL for ISIS database files
  */
-const UPLOAD_TIMES = [
-  { hour: 3, minute: 42, second: 4 },
-  { hour: 9, minute: 42, second: 4 },
-  { hour: 15, minute: 42, second: 4 },
-  { hour: 21, minute: 42, second: 4 },
-] as const;
+const ISIS_BUCKET_URL =
+  process.env.NEXT_PUBLIC_S3_ISIS_BUCKET_URL ||
+  "https://doublezero-mn-beta-isis-db.s3.us-east-1.amazonaws.com";
 
 /**
  * Result of ISIS file detection
@@ -47,9 +43,17 @@ export function parseIsisTimestamp(filename: string): Date | null {
 
   const [, year, month, day, hour, minute, second] = match;
 
-  return new Date(
-    `${year}-${month}-${day}T${hour}:${minute}:${second}Z`
-  );
+  return new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}Z`);
+}
+
+/**
+ * Build ISIS bucket URL for a specific filename
+ *
+ * @param filename - Filename to build URL for
+ * @returns Full HTTPS URL to ISIS file
+ */
+export function buildIsisUrlFromFilename(filename: string): string {
+  return `${ISIS_BUCKET_URL}/${filename}`;
 }
 
 /**
@@ -67,97 +71,95 @@ export function buildIsisUrl(timestamp: Date): string {
   const second = String(timestamp.getUTCSeconds()).padStart(2, "0");
 
   const filename = `${year}-${month}-${day}T${hour}-${minute}-${second}Z_upload_data.json`;
-  const bucketUrl =
-    process.env.NEXT_PUBLIC_S3_ISIS_BUCKET_URL ||
-    "https://doublezero-mn-beta-isis-db.s3.us-east-1.amazonaws.com";
-
-  return `${bucketUrl}/${filename}`;
+  return buildIsisUrlFromFilename(filename);
 }
 
 /**
- * Check if file exists using HEAD request
+ * List all ISIS files in the S3 bucket
  *
- * @param url - URL to check
- * @returns true if file exists, false otherwise
+ * Uses S3 ListBucket API (list-type=2) to get all files.
+ *
+ * @returns Array of filenames sorted by timestamp (latest first)
  */
-async function checkFileExists(url: string): Promise<boolean> {
+export async function listIsisFiles(): Promise<string[]> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000);
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
 
   try {
-    const response = await fetch(url, {
-      method: "HEAD",
+    const response = await fetch(`${ISIS_BUCKET_URL}/?list-type=2`, {
       signal: controller.signal,
     });
 
     clearTimeout(timeoutId);
-    return response.ok;
-  } catch {
+
+    if (!response.ok) {
+      throw new Error(`Failed to list ISIS files: ${response.status}`);
+    }
+
+    const xml = await response.text();
+
+    // Parse XML to extract <Key> elements
+    const keyMatches = xml.matchAll(/<Key>([^<]+)<\/Key>/g);
+    const files: string[] = [];
+
+    for (const match of keyMatches) {
+      const filename = match[1];
+      // Only include valid ISIS upload files
+      if (parseIsisTimestamp(filename)) {
+        files.push(filename);
+      }
+    }
+
+    // Sort by filename descending (ISO-8601 format sorts lexicographically)
+    files.sort((a, b) => b.localeCompare(a));
+
+    return files;
+  } catch (error) {
     clearTimeout(timeoutId);
-    return false;
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("Timeout listing ISIS files");
+    }
+    throw error;
   }
 }
 
 /**
- * Detect latest ISIS file by checking recent timestamps
+ * Detect latest ISIS file using S3 ListBucket API
  *
  * Strategy:
- * 1. Start from current date
- * 2. Check known upload times (03:42, 09:42, 15:42, 21:42 UTC) in reverse
- * 3. Go back 30 days checking all 4 daily uploads (120 total checks)
- * 4. Return first found file
+ * 1. List all files in the bucket
+ * 2. Sort by filename (ISO-8601 format sorts correctly)
+ * 3. Return the latest file
  *
  * @returns Detection result with timestamp and URL, or null if not found
  */
 export async function detectLatestIsis(): Promise<IsisDetectionResult | null> {
-  const now = new Date();
+  const files = await listIsisFiles();
 
-  // Start from today and go back 30 days
-  for (let daysBack = 0; daysBack < 30; daysBack++) {
-    const checkDate = new Date(now);
-    checkDate.setUTCDate(checkDate.getUTCDate() - daysBack);
-
-    // Check each upload time in reverse order (latest first)
-    for (let i = UPLOAD_TIMES.length - 1; i >= 0; i--) {
-      const { hour, minute, second } = UPLOAD_TIMES[i];
-
-      const checkTime = new Date(
-        Date.UTC(
-          checkDate.getUTCFullYear(),
-          checkDate.getUTCMonth(),
-          checkDate.getUTCDate(),
-          hour,
-          minute,
-          second
-        )
-      );
-
-      // Skip future timestamps
-      if (checkTime > now) continue;
-
-      const url = buildIsisUrl(checkTime);
-
-      try {
-        const exists = await checkFileExists(url);
-        if (exists) {
-          return { timestamp: checkTime, url };
-        }
-      } catch {
-        // Continue to next time slot
-      }
-    }
+  if (files.length === 0) {
+    return null;
   }
 
-  return null;
+  const latestFile = files[0]; // Already sorted descending
+  const timestamp = parseIsisTimestamp(latestFile);
+
+  if (!timestamp) {
+    return null;
+  }
+
+  return {
+    timestamp,
+    url: buildIsisUrlFromFilename(latestFile),
+  };
 }
 
 /**
  * Detect latest ISIS file for a specific date
  *
  * Strategy:
- * 1. Parse input date (YYYY-MM-DD format)
- * 2. Check known upload times in reverse order (21:42, 15:42, 09:42, 03:42)
- * 3. Return first found file for that date
+ * 1. List all files in the bucket
+ * 2. Filter to files matching the target date
+ * 3. Return the latest file for that date
  *
  * @param dateString - Date in YYYY-MM-DD format (e.g., "2025-11-20")
  * @returns Detection result with timestamp and URL, or null if not found
@@ -166,43 +168,31 @@ export async function detectLatestIsis(): Promise<IsisDetectionResult | null> {
 export async function detectLatestIsisForDate(
   dateString: string
 ): Promise<IsisDetectionResult | null> {
-  // Parse date
+  // Validate date format
   const match = dateString.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) {
     throw new Error("Invalid date format. Use YYYY-MM-DD (e.g., 2025-11-20)");
   }
 
-  const [, year, month, day] = match;
-  const targetDate = new Date(
-    Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day))
-  );
+  const files = await listIsisFiles();
 
-  // Check each upload time in reverse order (latest first)
-  for (let i = UPLOAD_TIMES.length - 1; i >= 0; i--) {
-    const { hour, minute, second } = UPLOAD_TIMES[i];
+  // Filter to files matching the target date prefix
+  const datePrefix = `${dateString}T`;
+  const matchingFiles = files.filter((f) => f.startsWith(datePrefix));
 
-    const checkTime = new Date(
-      Date.UTC(
-        targetDate.getUTCFullYear(),
-        targetDate.getUTCMonth(),
-        targetDate.getUTCDate(),
-        hour,
-        minute,
-        second
-      )
-    );
-
-    const url = buildIsisUrl(checkTime);
-
-    try {
-      const exists = await checkFileExists(url);
-      if (exists) {
-        return { timestamp: checkTime, url };
-      }
-    } catch {
-      // Continue to next time slot
-    }
+  if (matchingFiles.length === 0) {
+    return null;
   }
 
-  return null;
+  const latestFile = matchingFiles[0]; // Already sorted descending
+  const timestamp = parseIsisTimestamp(latestFile);
+
+  if (!timestamp) {
+    return null;
+  }
+
+  return {
+    timestamp,
+    url: buildIsisUrlFromFilename(latestFile),
+  };
 }
