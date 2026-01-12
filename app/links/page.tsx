@@ -27,7 +27,7 @@ export default function LinksPage() {
   // Show loading state during SSR and initial mount
   if (!mounted || isLoading) {
     return (
-      <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
+      <div className="flex items-center justify-center h-full">
         <Card className="w-96">
           <CardContent className="pt-6">
             <div className="text-center space-y-4">
@@ -43,7 +43,7 @@ export default function LinksPage() {
   // Show error state
   if (error) {
     return (
-      <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
+      <div className="flex items-center justify-center h-full">
         <Card className="w-96">
           <CardContent className="pt-6">
             <div className="text-center space-y-4">
@@ -66,7 +66,7 @@ export default function LinksPage() {
     processedTopology.topology.length === 0
   ) {
     return (
-      <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
+      <div className="flex items-center justify-center h-full">
         <Card className="w-96">
           <CardContent className="pt-6">
             <div className="text-center space-y-4">

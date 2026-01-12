@@ -17,7 +17,7 @@ export function MapSidebar({ links, visibleCount }: MapSidebarProps) {
   const totalCount = links.length;
 
   return (
-    <div className="w-80 bg-background border-r border-border flex flex-col h-full">
+    <div className="w-80 bg-background border-r border-border flex flex-col h-full min-h-0">
       {/* Header with Stats */}
       <div className="p-4 border-b border-border">
         <div className="flex items-center gap-2 mb-3">
@@ -40,7 +40,7 @@ export function MapSidebar({ links, visibleCount }: MapSidebarProps) {
       </div>
 
       {/* Scrollable Filter Sections */}
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1 min-h-0">
         <div className="p-4 space-y-6">
           {/* Bandwidth Filter */}
           <BandwidthFilter links={links} />

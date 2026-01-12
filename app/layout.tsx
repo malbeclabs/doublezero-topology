@@ -25,7 +25,8 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body
-        className={`${jetbrainsMono.variable} antialiased`}
+        className={`${jetbrainsMono.variable} antialiased h-full min-h-screen flex flex-col`}
+        // className={`${kaiseiDecol.variable} ${suisseIntl.variable} ${suisseMono.variable} antialiased h-full min-h-screen flex flex-col`}
       >
         <ThemeProvider
           attribute="class"
@@ -35,7 +36,9 @@ export default function RootLayout({
         >
           <TopologyProvider>
             <Navbar />
-            {children}
+            <main className="flex-1 min-h-0">
+              {children}
+            </main>
           </TopologyProvider>
         </ThemeProvider>
       </body>
