@@ -9,14 +9,32 @@ export function generateGeodesicArc(
     const distance = turf.distance(start, end, { units: "kilometers" });
     const numPoints = steps || calculateArcSteps(distance);
 
-    const midLon = (start[0] + end[0]) / 2;
-    const midLat = (start[1] + end[1]) / 2;
+    const startLon = start[0];
+    const startLat = start[1];
+    let endLon = end[0];
+    const endLat = end[1];
 
-    const lonDiff = end[0] - start[0];
-    const latDiff = end[1] - start[1];
+    // Wrap across the antimeridian so long links take the shortest path.
+    const lonDiff = endLon - startLon;
+    if (Math.abs(lonDiff) > 180) {
+      endLon += lonDiff > 0 ? -360 : 360;
+    }
+
+    const midLon = (startLon + endLon) / 2;
+    const midLat = (startLat + endLat) / 2;
+
+    const latDiff = endLat - startLat;
 
     const lineLength = Math.sqrt(lonDiff * lonDiff + latDiff * latDiff);
-    const offsetFactor = 0.2;
+    let offsetFactor = 0.2;
+    if (distance > 7000) {
+      offsetFactor = 0.1;
+    } else if (distance > 3000) {
+      offsetFactor = 0.18;
+    }
+    const avgAbsLat = (Math.abs(startLat) + Math.abs(endLat)) / 2;
+    const latScale = 1 - Math.min(avgAbsLat, 60) / 60 * 0.25;
+    offsetFactor *= latScale;
 
     let perpLon = -latDiff / lineLength * lineLength * offsetFactor;
     let perpLat = lonDiff / lineLength * lineLength * offsetFactor;
@@ -37,8 +55,8 @@ export function generateGeodesicArc(
       const tSquared = t * t;
       const twoOneMinusTTimesT = 2 * oneMinusT * t;
 
-      const lon = oneMinusTSquared * start[0] + twoOneMinusTTimesT * controlPoint[0] + tSquared * end[0];
-      const lat = oneMinusTSquared * start[1] + twoOneMinusTTimesT * controlPoint[1] + tSquared * end[1];
+      const lon = oneMinusTSquared * startLon + twoOneMinusTTimesT * controlPoint[0] + tSquared * endLon;
+      const lat = oneMinusTSquared * startLat + twoOneMinusTTimesT * controlPoint[1] + tSquared * endLat;
 
       coordinates.push([lon, lat]);
     }
