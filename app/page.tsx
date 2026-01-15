@@ -28,7 +28,10 @@ import { useTopology } from "@/contexts/TopologyContext";
 
 export default function HomePage() {
   const router = useRouter();
-  const { snapshotData, isisData, processedTopology, clearSnapshot, clearIsis, processTopology } = useTopology();
+  const { snapshotData, isisData, processedTopology, clearSnapshot, clearIsis, processingState } = useTopology();
+
+  // Derive processing state from context
+  const isProcessing = processingState === "processing";
 
   // Modal states
   const [showSnapshotS3Modal, setShowSnapshotS3Modal] = useState(false);
@@ -36,31 +39,13 @@ export default function HomePage() {
   const [showIsisS3Modal, setShowIsisS3Modal] = useState(false);
   const [showIsisUploadModal, setShowIsisUploadModal] = useState(false);
 
-  // Auto-processing state
-  const [isProcessing, setIsProcessing] = useState(false);
-
   // Prefetch results page
   useEffect(() => {
     router.prefetch("/results");
   }, [router]);
 
-  // Auto-process in background when both files are ready
-  useEffect(() => {
-    const autoProcess = async () => {
-      if (snapshotData && isisData && !processedTopology && !isProcessing) {
-        setIsProcessing(true);
-        try {
-          await processTopology();
-        } catch (error) {
-          console.error("Auto-processing failed:", error);
-        } finally {
-          setIsProcessing(false);
-        }
-      }
-    };
-
-    autoProcess();
-  }, [snapshotData, isisData, processedTopology, isProcessing, processTopology]);
+  // Note: Auto-processing is handled by TopologyContext when setSnapshotData/setIsisData are called
+  // No need for a useEffect here - the context triggers processTopology automatically
 
   const bothFilesReady = !!snapshotData && !!isisData;
   const resultsReady = !!processedTopology;
