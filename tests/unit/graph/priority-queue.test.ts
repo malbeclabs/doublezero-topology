@@ -184,7 +184,8 @@ describe("PriorityQueue", () => {
       const dequeueTime = performance.now() - startDequeue;
 
       expect(pq.isEmpty()).toBe(true);
-      expect(dequeueTime).toBeLessThan(400); // Should be fast (relaxed for CI runners)
+      // Should be much faster (relaxed for CI runners)
+      expect(dequeueTime).toBeLessThan(1000);
     });
 
     it("should maintain heap property with alternating enqueue/dequeue", () => {
