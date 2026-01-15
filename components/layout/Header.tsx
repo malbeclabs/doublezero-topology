@@ -28,7 +28,7 @@ export function Header() {
           priority
           className="h-10 w-auto"
         />
-        <h1 className="font-heading text-xl">Network Topology</h1>
+        <h1 className="text-xl font-bold">Network Topology</h1>
       </div>
     </header>
   );

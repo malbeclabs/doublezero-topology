@@ -19,6 +19,8 @@ import {
   useState,
   useRef,
   useEffect,
+  useCallback,
+  useMemo,
   ReactNode,
 } from "react";
 import type {
@@ -137,7 +139,7 @@ export function TopologyProvider({ children }: { children: ReactNode }) {
   /**
    * Process topology from snapshot and ISIS data
    */
-  const processTopology = async () => {
+  const processTopology = useCallback(async () => {
     if (!snapshotDataRef.current || !isisDataRef.current) {
       throw new Error("Both snapshot and ISIS data required to process topology");
     }
@@ -192,12 +194,12 @@ export function TopologyProvider({ children }: { children: ReactNode }) {
       setIsLoading(false);
       processingInProgress.current = false;
     }
-  };
+  }, []);
 
   /**
    * Set snapshot data and auto-process if ISIS already loaded
    */
-  const setSnapshotData = async (snapshot: SnapshotData) => {
+  const setSnapshotData = useCallback(async (snapshot: SnapshotData) => {
     setSnapshotDataState(snapshot);
     cacheSnapshot(snapshot);
 
@@ -216,12 +218,12 @@ export function TopologyProvider({ children }: { children: ReactNode }) {
         console.error("[ERROR] Auto-processing failed:", err);
       }
     }
-  };
+  }, [processTopology]);
 
   /**
    * Set ISIS data and auto-process if snapshot already loaded
    */
-  const setIsisData = async (isis: IsisData) => {
+  const setIsisData = useCallback(async (isis: IsisData) => {
     setIsisDataState(isis);
     cacheIsis(isis);
 
@@ -240,12 +242,12 @@ export function TopologyProvider({ children }: { children: ReactNode }) {
         console.error("[ERROR] Auto-processing failed:", err);
       }
     }
-  };
+  }, [processTopology]);
 
   /**
    * Clear snapshot data
    */
-  const clearSnapshot = () => {
+  const clearSnapshot = useCallback(() => {
     setSnapshotDataState(null);
     snapshotDataRef.current = null;
     setProcessedTopologyState(null);
@@ -254,12 +256,12 @@ export function TopologyProvider({ children }: { children: ReactNode }) {
       sessionStorage.removeItem("dztopo:snapshot:v2");
       sessionStorage.removeItem("dztopo:processed:v2");
     }
-  };
+  }, []);
 
   /**
    * Clear ISIS data
    */
-  const clearIsis = () => {
+  const clearIsis = useCallback(() => {
     setIsisDataState(null);
     isisDataRef.current = null;
     setProcessedTopologyState(null);
@@ -268,12 +270,12 @@ export function TopologyProvider({ children }: { children: ReactNode }) {
       sessionStorage.removeItem("dztopo:isis:v2");
       sessionStorage.removeItem("dztopo:processed:v2");
     }
-  };
+  }, []);
 
   /**
    * Clear all data
    */
-  const clearAll = () => {
+  const clearAll = useCallback(() => {
     setSnapshotDataState(null);
     snapshotDataRef.current = null;
     setIsisDataState(null);
@@ -289,42 +291,68 @@ export function TopologyProvider({ children }: { children: ReactNode }) {
       sessionStorage.removeItem("dztopo:isis:v2");
       sessionStorage.removeItem("dztopo:processed:v2");
     }
-  };
+  }, []);
 
   // Computed properties
   const bothLoaded = Boolean(snapshotData && isisData);
   const needsProcessing = bothLoaded && !processedTopology;
   const canProcess = bothLoaded;
 
-  const value: TopologyContextValue = {
-    // Data
-    snapshotData,
-    isisData,
-    processedTopology,
+  // Memoize context value to prevent unnecessary re-renders of consumers
+  const value = useMemo<TopologyContextValue>(
+    () => ({
+      // Data
+      snapshotData,
+      isisData,
+      processedTopology,
 
-    // Processing state
-    processingState,
-    processingError,
+      // Processing state
+      processingState,
+      processingError,
 
-    // Actions
-    setSnapshotData,
-    setIsisData,
-    processTopology,
-    clearSnapshot,
-    clearIsis,
-    clearAll,
+      // Actions (stable references via useCallback)
+      setSnapshotData,
+      setIsisData,
+      processTopology,
+      clearSnapshot,
+      clearIsis,
+      clearAll,
 
-    // Computed
-    bothLoaded,
-    needsProcessing,
-    canProcess,
+      // Computed
+      bothLoaded,
+      needsProcessing,
+      canProcess,
 
-    // Loading states
-    isLoading,
-    setIsLoading,
-    error,
-    setError,
-  };
+      // Loading states
+      isLoading,
+      setIsLoading,
+      error,
+      setError,
+    }),
+    [
+      // Data dependencies
+      snapshotData,
+      isisData,
+      processedTopology,
+      // Processing state dependencies
+      processingState,
+      processingError,
+      // Action dependencies (stable via useCallback)
+      setSnapshotData,
+      setIsisData,
+      processTopology,
+      clearSnapshot,
+      clearIsis,
+      clearAll,
+      // Computed dependencies
+      bothLoaded,
+      needsProcessing,
+      canProcess,
+      // Loading state dependencies
+      isLoading,
+      error,
+    ],
+  );
 
   return (
     <TopologyContext.Provider value={value}>

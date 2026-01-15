@@ -75,10 +75,10 @@ export function DataStatusLegend({
       style={{ boxShadow: "var(--shadow-lg)" }}
     >
       <CardHeader className="pb-3">
-        <CardTitle className="font-heading text-sm font-semibold text-foreground">
+        <CardTitle className="text-sm font-bold text-foreground">
           Data Completeness
         </CardTitle>
-        <p className="font-body text-xs text-muted-foreground mt-1">
+        <p className="text-xs text-muted-foreground mt-1 font-light">
           Click to show/hide on map
         </p>
       </CardHeader>

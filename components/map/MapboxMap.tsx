@@ -1,9 +1,10 @@
 "use client";
 
-import { useRef, useState, useMemo, useEffect } from "react";
+import { useRef, useState, useMemo, useEffect, useCallback } from "react";
 import Map, { Source, Layer, Marker } from "react-map-gl/maplibre";
 import type { MapRef, ViewState } from "react-map-gl/maplibre";
 import type { LayerProps } from "react-map-gl/maplibre";
+import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useTheme } from "next-themes";
 import { X } from "lucide-react";
@@ -321,17 +322,30 @@ export function MapboxMap({
   const [pinnedNode, setPinnedNode] = useState<NodeProperties | null>(null);
   const [mapReady, setMapReady] = useState(false);
 
-  // Animated packet state - position along the path (0 to 1)
-  const [packetProgress, setPacketProgress] = useState(0);
+  // Animated packet refs - imperative animation to avoid 60 re-renders/sec
+  const packetMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const animationFrameRef = useRef<number>(0);
+  const lastHopIndexRef = useRef<number | null>(null);
+  // Track animation start time and whether tab is visible
+  const animationStartTimeRef = useRef<number | null>(null);
+  const accumulatedTimeRef = useRef<number>(0);
+  const lastTimestampRef = useRef<number | null>(null);
 
   const { resolvedTheme } = useTheme();
-  const { selectedLinkPk, hoveredLinkPk, setSelectedLink, setHoveredLink: setHoveredLinkStore } = useTableStore();
-  const { computedPath, hasPath } = usePathStore();
-  const { isPathActiveMode } = useMapModeStore();
 
-  // Extract boolean values for useEffect dependencies
-  const hasComputedPath = hasPath();
-  const isInPathActiveMode = isPathActiveMode();
+  // Use granular selectors to avoid unnecessary re-renders
+  const selectedLinkPk = useTableStore((s) => s.selectedLinkPk);
+  const hoveredLinkPk = useTableStore((s) => s.hoveredLinkPk);
+  const setSelectedLink = useTableStore((s) => s.setSelectedLink);
+  const setHoveredLinkStore = useTableStore((s) => s.setHoveredLink);
+
+  const computedPath = usePathStore((s) => s.computedPath);
+
+  const mode = useMapModeStore((s) => s.mode);
+
+  // Compute derived boolean values from selector results
+  const hasComputedPath = computedPath !== null;
+  const isInPathActiveMode = mode === "path-active";
 
   const mapStyle = resolvedTheme === "dark" ? MAP_STYLE_DARK : MAP_STYLE_LIGHT;
 
@@ -347,8 +361,8 @@ export function MapboxMap({
   }, [links, visibleStatuses]);
 
   const linksGeoJSON = useMemo(() => {
-    return linksToGeoJSON(filteredLinks, selectedLinkPk, hoveredLinkPk, hasPath());
-  }, [filteredLinks, selectedLinkPk, hoveredLinkPk, hasPath]);
+    return linksToGeoJSON(filteredLinks, selectedLinkPk, hoveredLinkPk, hasComputedPath);
+  }, [filteredLinks, selectedLinkPk, hoveredLinkPk, hasComputedPath]);
 
   const locationsGeoJSON = useMemo(() => {
     return locationsToGeoJSON(filteredLocations);
@@ -407,12 +421,14 @@ export function MapboxMap({
     };
   }, [computedPath, locations]);
 
-  // Calculate packet position along the path based on progress
-  const packetPosition = useMemo(() => {
+  // Pre-compute path coordinates for animation (only when path changes)
+  const pathCoordinates = useMemo(() => {
     if (!computedPath) return null;
 
     // Collect all coordinates from the path
     const allCoords: [number, number][] = [];
+    const segmentBoundaries: number[] = [0]; // Track where each segment starts
+
     for (let i = 0; i < computedPath.hops.length - 1; i++) {
       const sourceHop = computedPath.hops[i];
       const targetHop = computedPath.hops[i + 1];
@@ -431,13 +447,23 @@ export function MapboxMap({
       } else {
         allCoords.push(...coords.slice(1));
       }
+
+      // Track where this segment ends (next segment will start here)
+      segmentBoundaries.push(allCoords.length - 1);
     }
 
     if (allCoords.length === 0) return null;
 
-    // Calculate index along the path
+    return { allCoords, segmentBoundaries };
+  }, [computedPath]);
+
+  // Calculate position along the path given progress (0 to 1)
+  const getPositionAtProgress = useCallback((progress: number): { lon: number; lat: number } | null => {
+    if (!pathCoordinates) return null;
+
+    const { allCoords } = pathCoordinates;
     const totalPoints = allCoords.length - 1;
-    const rawIndex = packetProgress * totalPoints;
+    const rawIndex = progress * totalPoints;
     const index = Math.floor(rawIndex);
     const t = rawIndex - index; // Interpolation factor
 
@@ -457,45 +483,15 @@ export function MapboxMap({
       lon: lon1 + (lon2 - lon1) * t,
       lat: lat1 + (lat2 - lat1) * t,
     };
-  }, [computedPath, packetProgress]);
+  }, [pathCoordinates]);
 
-  // Calculate which hop segment the packet is currently traversing
-  // Must match the exact coordinate calculation logic used for packet position
-  const currentHopIndex = useMemo(() => {
-    if (!computedPath || packetProgress === 0) return null;
+  // Calculate which hop segment corresponds to a given progress
+  const getHopIndexAtProgress = useCallback((progress: number): number | null => {
+    if (!pathCoordinates || progress === 0) return null;
 
-    // Build the same coordinate array as packet position calculation
-    const allCoords: [number, number][] = [];
-    const segmentBoundaries: number[] = [0]; // Track where each segment starts in the coordinate array
-
-    for (let i = 0; i < computedPath.hops.length - 1; i++) {
-      const sourceHop = computedPath.hops[i];
-      const targetHop = computedPath.hops[i + 1];
-      const sourceCoords: [number, number] = [sourceHop.longitude, sourceHop.latitude];
-      const targetCoords: [number, number] = [targetHop.longitude, targetHop.latitude];
-
-      // Generate arc or straight line (same logic as packet position)
-      const shouldUseArc = shouldUseGeodesicArc(sourceCoords, targetCoords);
-      const coords = shouldUseArc
-        ? generateGeodesicArc(sourceCoords, targetCoords)
-        : [sourceCoords, targetCoords];
-
-      // Add coords (skip first if not the first segment to avoid duplicates)
-      if (i === 0) {
-        allCoords.push(...coords);
-      } else {
-        allCoords.push(...coords.slice(1));
-      }
-
-      // Track where this segment ends (next segment will start here)
-      segmentBoundaries.push(allCoords.length - 1);
-    }
-
-    if (allCoords.length === 0) return null;
-
-    // Calculate current coordinate index (same as packet position)
+    const { allCoords, segmentBoundaries } = pathCoordinates;
     const totalPoints = allCoords.length - 1;
-    const currentIndex = Math.floor(packetProgress * totalPoints);
+    const currentIndex = Math.floor(progress * totalPoints);
 
     // Find which segment this coordinate index belongs to
     for (let segmentIdx = 0; segmentIdx < segmentBoundaries.length - 1; segmentIdx++) {
@@ -509,14 +505,7 @@ export function MapboxMap({
 
     // Fallback: last segment
     return segmentBoundaries.length - 2;
-  }, [computedPath, packetProgress]);
-
-  // Notify parent component when current hop changes (for dynamic highlighting)
-  useEffect(() => {
-    if (onCurrentHopChange) {
-      onCurrentHopChange(currentHopIndex);
-    }
-  }, [currentHopIndex, onCurrentHopChange]);
+  }, [pathCoordinates]);
 
   useEffect(() => {
     if (!selectedLinkPk) {
@@ -641,7 +630,7 @@ export function MapboxMap({
 
   // Auto-fit map to computed path
   useEffect(() => {
-    if (!computedPath || !mapRef.current || !mapReady || !isPathActiveMode()) {
+    if (!computedPath || !mapRef.current || !mapReady || !isInPathActiveMode) {
       // Reset tracking when no path is active
       if (!computedPath) {
         lastFittedPathId.current = null;
@@ -727,38 +716,120 @@ export function MapboxMap({
         }
       }, 500);
     }
-  }, [computedPath, mapReady, isPathActiveMode, locations]);
+  }, [computedPath, mapReady, isInPathActiveMode, locations]);
 
-  // Animate packet flowing along the path
+  // Animate packet flowing along the path using imperative MapLibre API
+  // This avoids 60 React re-renders per second by updating the marker directly
   useEffect(() => {
-    if (!hasComputedPath || !isInPathActiveMode) {
-      setPacketProgress(0);
-      return;
-    }
+    const map = mapRef.current?.getMap();
 
-    let animationFrameId: number;
-    let startTime: number | null = null;
-    const duration = 5000; // 5 seconds for full path traversal
-
-    const animate = (timestamp: number) => {
-      if (!startTime) startTime = timestamp;
-      const elapsed = timestamp - startTime;
-
-      // Calculate progress (0 to 1) and loop
-      const progress = (elapsed % duration) / duration;
-      setPacketProgress(progress);
-
-      animationFrameId = requestAnimationFrame(animate);
-    };
-
-    animationFrameId = requestAnimationFrame(animate);
-
-    return () => {
-      if (animationFrameId) {
-        cancelAnimationFrame(animationFrameId);
+    // Clean up existing marker and animation when path changes or is cleared
+    const cleanup = () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = 0;
+      }
+      if (packetMarkerRef.current) {
+        packetMarkerRef.current.remove();
+        packetMarkerRef.current = null;
+      }
+      // Reset animation timing state
+      animationStartTimeRef.current = null;
+      accumulatedTimeRef.current = 0;
+      lastTimestampRef.current = null;
+      // Notify parent that we're no longer on any hop
+      if (lastHopIndexRef.current !== null && onCurrentHopChange) {
+        onCurrentHopChange(null);
+        lastHopIndexRef.current = null;
       }
     };
-  }, [hasComputedPath, isInPathActiveMode]);
+
+    // Exit early if no path, not in path mode, or map not ready
+    if (!hasComputedPath || !isInPathActiveMode || !map || !pathCoordinates) {
+      cleanup();
+      return cleanup;
+    }
+
+    // Create the packet marker element
+    const el = document.createElement('div');
+    el.className = 'packet-marker';
+    el.style.width = '10px';
+    el.style.height = '10px';
+    el.style.borderRadius = '50%';
+    el.style.backgroundColor = '#fbbf24'; // Yellow/amber color
+    el.style.border = '2px solid white';
+    el.style.boxShadow = '0 2px 4px rgba(0,0,0,0.3)';
+    // Add pulse animation via CSS
+    el.style.animation = 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite';
+    el.title = 'Packet flow';
+
+    // Get initial position
+    const initialPosition = getPositionAtProgress(0);
+    if (!initialPosition) {
+      cleanup();
+      return cleanup;
+    }
+
+    // Create the MapLibre marker
+    const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+      .setLngLat([initialPosition.lon, initialPosition.lat])
+      .addTo(map);
+
+    packetMarkerRef.current = marker;
+
+    const duration = 5000; // 5 seconds for full path traversal
+    const maxDeltaTime = 100; // Cap delta time to prevent teleporting after tab switch
+
+    const animate = (timestamp: number) => {
+      // Handle tab visibility - cap delta time to prevent large jumps
+      if (lastTimestampRef.current !== null) {
+        const deltaTime = Math.min(timestamp - lastTimestampRef.current, maxDeltaTime);
+        accumulatedTimeRef.current += deltaTime;
+      } else {
+        // First frame
+        accumulatedTimeRef.current = 0;
+      }
+      lastTimestampRef.current = timestamp;
+
+      // Calculate progress (0 to 1) and loop
+      const progress = (accumulatedTimeRef.current % duration) / duration;
+
+      // Update marker position imperatively (no React state update!)
+      const position = getPositionAtProgress(progress);
+      if (position && packetMarkerRef.current) {
+        packetMarkerRef.current.setLngLat([position.lon, position.lat]);
+      }
+
+      // Calculate hop index and only notify parent if it changed
+      const hopIndex = getHopIndexAtProgress(progress);
+      if (hopIndex !== lastHopIndexRef.current) {
+        lastHopIndexRef.current = hopIndex;
+        if (onCurrentHopChange) {
+          onCurrentHopChange(hopIndex);
+        }
+      }
+
+      // Continue animation loop
+      animationFrameRef.current = requestAnimationFrame(animate);
+    };
+
+    // Start animation
+    animationFrameRef.current = requestAnimationFrame(animate);
+
+    // Handle tab visibility changes to pause time accumulation
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        // Tab became hidden - record the timestamp so we can ignore time gap
+        lastTimestampRef.current = null;
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      cleanup();
+    };
+  }, [hasComputedPath, isInPathActiveMode, pathCoordinates, getPositionAtProgress, getHopIndexAtProgress, onCurrentHopChange]);
 
   const lineLayer: LayerProps = {
     id: "network-links",
@@ -818,7 +889,7 @@ export function MapboxMap({
 
       if (feature.layer.id === "network-links") {
         // In path-active mode, don't allow link clicking
-        if (isPathActiveMode()) {
+        if (isInPathActiveMode) {
           return;
         }
 
@@ -912,7 +983,7 @@ export function MapboxMap({
         </Source>
 
         {/* Computed Path Layer */}
-        {hasPath() && computedPath && (
+        {hasComputedPath && computedPath && (
           <>
             <Source id="computed-path" type="geojson" data={pathGeoJSON}>
               {/* Outer glow layer - subtle halo effect */}
@@ -921,8 +992,8 @@ export function MapboxMap({
                 type="line"
                 paint={{
                   "line-color": "#3b82f6", // Blue
-                  "line-width": isPathActiveMode() ? 10 : 8,
-                  "line-opacity": isPathActiveMode() ? 0.25 : 0.2,
+                  "line-width": isInPathActiveMode ? 10 : 8,
+                  "line-opacity": isInPathActiveMode ? 0.25 : 0.2,
                   "line-blur": 4,
                 }}
                 layout={{
@@ -937,8 +1008,8 @@ export function MapboxMap({
                 type="line"
                 paint={{
                   "line-color": "#3b82f6", // Blue
-                  "line-width": isPathActiveMode() ? 5 : 4,
-                  "line-opacity": isPathActiveMode() ? 0.85 : 0.75,
+                  "line-width": isInPathActiveMode ? 5 : 4,
+                  "line-opacity": isInPathActiveMode ? 0.85 : 0.75,
                   "line-blur": 0.5, // Subtle blur for softer appearance
                 }}
                 layout={{
@@ -967,7 +1038,7 @@ export function MapboxMap({
                   "text-color": "#ffffff", // White arrows
                   "text-halo-color": "#3b82f6", // Blue halo matching path
                   "text-halo-width": 1.5,
-                  "text-opacity": isPathActiveMode() ? 0.75 : 0.65,
+                  "text-opacity": isInPathActiveMode ? 0.75 : 0.65,
                 }}
               />
             </Source>
@@ -998,20 +1069,8 @@ export function MapboxMap({
               />
             </Marker>
 
-            {/* Animated Packet Marker */}
-            {packetPosition && (
-              <Marker
-                longitude={packetPosition.lon}
-                latitude={packetPosition.lat}
-                anchor="center"
-              >
-                <div
-                  className="w-2.5 h-2.5 rounded-full border-2 border-white shadow-lg animate-pulse"
-                  style={{ backgroundColor: "#fbbf24" }}
-                  title="Packet flow"
-                />
-              </Marker>
-            )}
+            {/* Animated Packet Marker is now rendered imperatively via MapLibre API */}
+            {/* See the useEffect hook that creates packetMarkerRef */}
           </>
         )}
       </Map>

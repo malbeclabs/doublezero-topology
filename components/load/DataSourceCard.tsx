@@ -60,8 +60,8 @@ export function DataSourceCard({
       <CardHeader>
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1">
-            <CardTitle className="font-heading mb-2">{title}</CardTitle>
-            <CardDescription className="font-body text-sm leading-relaxed">
+            <CardTitle className="font-bold mb-2">{title}</CardTitle>
+            <CardDescription className="text-sm leading-relaxed">
               {description}
             </CardDescription>
           </div>

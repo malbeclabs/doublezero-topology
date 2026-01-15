@@ -42,8 +42,12 @@ function MapPageContent() {
   } = usePathStore();
   const [mounted, setMounted] = useState(false);
 
-  // Get filter state from Zustand store
-  const filters = useMapFilterStore();
+  // Get filter state from Zustand store using granular selectors
+  const bandwidthTiers = useMapFilterStore((s) => s.bandwidthTiers);
+  const healthStatuses = useMapFilterStore((s) => s.healthStatuses);
+  const driftRange = useMapFilterStore((s) => s.driftRange);
+  const dataStatuses = useMapFilterStore((s) => s.dataStatuses);
+  const searchQuery = useMapFilterStore((s) => s.searchQuery);
 
   // Get map mode state
   const {
@@ -79,13 +83,13 @@ function MapPageContent() {
   const filteredLinks = useMemo(() => {
     if (!processedTopology?.topology) return [];
     return filterLinks(processedTopology.topology, {
-      bandwidthTiers: filters.bandwidthTiers,
-      healthStatuses: filters.healthStatuses,
-      driftRange: filters.driftRange,
-      dataStatuses: filters.dataStatuses,
-      searchQuery: filters.searchQuery,
+      bandwidthTiers,
+      healthStatuses,
+      driftRange,
+      dataStatuses,
+      searchQuery,
     });
-  }, [processedTopology?.topology, filters.bandwidthTiers, filters.healthStatuses, filters.driftRange, filters.dataStatuses, filters.searchQuery]);
+  }, [processedTopology?.topology, bandwidthTiers, healthStatuses, driftRange, dataStatuses, searchQuery]);
 
   // Handler for computing path from modal
   const handleComputePath = (

@@ -1,4 +1,5 @@
-import * as turf from "@turf/turf";
+import distance from "@turf/distance";
+import { point } from "@turf/helpers";
 
 export function generateGeodesicArc(
   start: [number, number],
@@ -6,8 +7,8 @@ export function generateGeodesicArc(
   steps?: number,
 ): [number, number][] {
   try {
-    const distance = turf.distance(start, end, { units: "kilometers" });
-    const numPoints = steps || calculateArcSteps(distance);
+    const distanceKm = distance(point(start), point(end), { units: "kilometers" });
+    const numPoints = steps || calculateArcSteps(distanceKm);
 
     const startLon = start[0];
     const startLat = start[1];
@@ -27,9 +28,9 @@ export function generateGeodesicArc(
 
     const lineLength = Math.sqrt(lonDiff * lonDiff + latDiff * latDiff);
     let offsetFactor = 0.2;
-    if (distance > 7000) {
+    if (distanceKm > 7000) {
       offsetFactor = 0.1;
-    } else if (distance > 3000) {
+    } else if (distanceKm > 3000) {
       offsetFactor = 0.18;
     }
     const avgAbsLat = (Math.abs(startLat) + Math.abs(endLat)) / 2;
@@ -78,6 +79,6 @@ export function shouldUseGeodesicArc(
   start: [number, number],
   end: [number, number],
 ): boolean {
-  const distance = turf.distance(start, end, { units: "kilometers" });
-  return distance > 50;
+  const distanceKm = distance(point(start), point(end), { units: "kilometers" });
+  return distanceKm > 50;
 }

@@ -70,7 +70,7 @@ export default function HomePage() {
       <div className="space-y-8">
         {/* Header */}
         <div className="space-y-3">
-          <h1 className="font-heading text-4xl font-bold tracking-tight">
+          <h1 className="text-4xl font-bold tracking-tight">
             Load Topology Data
           </h1>
           <p className="text-muted-foreground text-lg">
