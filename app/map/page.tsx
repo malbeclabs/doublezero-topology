@@ -174,7 +174,7 @@ function MapPageContent() {
   // Show loading state during SSR and initial client mount
   if (!mounted || isLoading) {
     return (
-      <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
+      <div className="flex items-center justify-center h-full">
         <Card className="w-96">
           <CardContent className="pt-6">
             <div className="text-center space-y-4">
@@ -189,7 +189,7 @@ function MapPageContent() {
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
+      <div className="flex items-center justify-center h-full">
         <Card className="w-96">
           <CardContent className="pt-6">
             <div className="text-center space-y-4">
@@ -205,7 +205,7 @@ function MapPageContent() {
 
   if (!processedTopology) {
     return (
-      <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
+      <div className="flex items-center justify-center h-full">
         <Card className="w-96">
           <CardContent className="pt-6">
             <div className="text-center space-y-4">
@@ -222,7 +222,7 @@ function MapPageContent() {
   }
 
   return (
-    <div className="h-[calc(100vh-4rem)] w-full flex overflow-hidden relative">
+    <div className="h-full w-full flex overflow-hidden relative">
       {/* Sidebar */}
       <MapSidebar
         links={processedTopology.topology}
@@ -315,7 +315,7 @@ function MapPageContent() {
 export default function MapPage() {
   return (
     <Suspense fallback={
-      <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
+      <div className="flex items-center justify-center h-full">
         <Card className="w-96">
           <CardContent className="pt-6">
             <div className="text-center space-y-4">
